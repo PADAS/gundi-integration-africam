@@ -1,5 +1,5 @@
 import datetime
-from typing import List
+from typing import List, Tuple
 import httpx
 import stamina
 from gundi_client_v2.client import GundiClient, GundiDataSenderClient
@@ -135,3 +135,46 @@ async def send_messages_to_gundi(messages: List[dict], **kwargs) -> dict:
     assert integration_id, "integration_id is required"
     sensors_api_client = await _get_sensors_api_client(integration_id=str(integration_id))
     return await sensors_api_client.post_messages(data=messages)
+
+
+async def get_er_credentials_from_destination(integration_id: str) -> Tuple[str, str]:
+    """Return (base_url, token) for the first destination of the given integration.
+
+    The connection's destination list is expected to contain a single EarthRanger
+    integration.  The bearer token is read from that integration's ``auth`` action
+    configuration (``data.token``).
+
+    Raises ``ValueError`` if no destinations are found or the auth token is missing.
+    """
+    async with GundiClient() as client:
+        for attempt in stamina.retry_context(
+            on=httpx.HTTPError, wait_initial=5.0, wait_jitter=5.0, wait_max=60.0
+        ):
+            with attempt:
+                connection = await client.get_connection_details(str(integration_id))
+
+    if not connection.destinations:
+        raise ValueError(f"No destinations configured for integration {integration_id}")
+
+    destination = connection.destinations[0]
+
+    async with GundiClient() as client:
+        for attempt in stamina.retry_context(
+            on=httpx.HTTPError, wait_initial=5.0, wait_jitter=5.0, wait_max=60.0
+        ):
+            with attempt:
+                dest_integration = await client.get_integration_details(str(destination.id))
+
+    auth_config = dest_integration.get_action_config("auth")
+    if not auth_config:
+        raise ValueError(
+            f"No auth configuration found for destination integration {destination.id}"
+        )
+
+    token = auth_config.data.get("token")
+    if not token:
+        raise ValueError(
+            f"No token in auth configuration for destination integration {destination.id}"
+        )
+
+    return destination.base_url, token

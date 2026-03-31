@@ -41,8 +41,8 @@ def africam_config():
 @pytest.fixture
 def mock_get_er_credentials(mocker):
     return mocker.patch(
-        "app.actions.handlers.get_er_credentials_from_destination",
-        new=AsyncMock(return_value=(ER_API_URL, ER_TOKEN)),
+        "app.actions.handlers.get_er_credentials_from_destinations",
+        new=AsyncMock(return_value=[(ER_API_URL, ER_TOKEN)]),
     )
 
 
@@ -98,6 +98,15 @@ def mock_state_manager(mocker):
     manager.get_state = AsyncMock(return_value={})
     manager.set_state = AsyncMock(return_value=None)
     return manager
+
+
+@pytest.fixture
+def mock_state_manager_with_last_execution(mocker):
+    last_run = "2024-06-01T12:00:00+00:00"
+    manager = mocker.MagicMock()
+    manager.get_state = AsyncMock(return_value={"last_execution": last_run})
+    manager.set_state = AsyncMock(return_value=None)
+    return manager, last_run
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +231,49 @@ async def test_pull_events_uses_state_for_updated_since(
 
 
 @pytest.mark.asyncio
+async def test_pull_events_processes_multiple_destinations(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager
+):
+    """All destinations in the connection should be processed independently."""
+    ER_API_URL_2 = "https://test-er-site-2.pamdas.org"
+    ER_TOKEN_2 = "er-test-token-2"
+    mocker.patch(
+        "app.actions.handlers.get_er_credentials_from_destinations",
+        new=AsyncMock(return_value=[(ER_API_URL, ER_TOKEN), (ER_API_URL_2, ER_TOKEN_2)]),
+    )
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+    mock_get_events = mocker.patch(
+        "app.actions.handlers.get_events", new=AsyncMock(return_value=[
+            {
+                "id": "er-event-aaa",
+                "event_type": "wildlife_sighting",
+                "title": "Rhino",
+                "location": {"latitude": -1.4, "longitude": 35.1},
+                "event_details": {},
+            }
+        ])
+    )
+    mock_post = mocker.patch(
+        "app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response)
+    )
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+
+    result = await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    # get_events called once per destination
+    assert mock_get_events.call_count == 2
+    # one event from each destination forwarded
+    assert result["events_fetched"] == 2
+    assert result["events_forwarded"] == 2
+    assert result["errors"] == 0
+    # state saved once per destination
+    assert mock_state_manager.set_state.call_count == 2
+    calls = {c.kwargs["source_id"] for c in mock_state_manager.set_state.call_args_list}
+    assert calls == {ER_API_URL, ER_API_URL_2}
+
+
+@pytest.mark.asyncio
 async def test_pull_events_saves_state_after_run(
     mocker, mock_integration, africam_config, er_events, africam_response,
     mock_state_manager, mock_get_er_credentials
@@ -238,6 +290,7 @@ async def test_pull_events_saves_state_after_run(
     call_kwargs = mock_state_manager.set_state.call_args.kwargs
     assert call_kwargs["integration_id"] == INTEGRATION_ID
     assert call_kwargs["action_id"] == "process_new_events"
+    assert call_kwargs["source_id"] == ER_API_URL
     assert "last_execution" in call_kwargs["state"]
 
 
@@ -288,6 +341,7 @@ async def test_pull_events_uses_er_credentials_from_destination(
 
     patch_kwargs = mock_patch.call_args.kwargs
     assert patch_kwargs["api_url"] == ER_API_URL
+    assert patch_kwargs["token"] == ER_TOKEN
 
 
 # ---------------------------------------------------------------------------

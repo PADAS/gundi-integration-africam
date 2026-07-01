@@ -42,7 +42,7 @@ python app/register.py --slug <slug> --service-url <url>
 |------|---------|
 | `app/actions/handlers.py` | `action_process_new_events` — the main action handler (runs every minute) |
 | `app/actions/configurations.py` | `AfricamActionConfiguration` — action config model |
-| `app/services/earthranger.py` | EarthRanger client (`get_events`, `patch_event`) using `AsyncERClient` |
+| `app/services/earthranger.py` | EarthRanger client (`resolve_event_type_ids`, `get_events`, `patch_event`) using `AsyncERClient` |
 | `app/services/africam.py` | Africam client (`post_event`) — POSTs to `/events/webhook` |
 | `app/services/gundi.py` | Adds `get_er_credentials_from_destination` alongside the standard send helpers |
 
@@ -52,8 +52,8 @@ Runs on a `* * * * *` crontab (every minute). For each execution:
 
 1. Calls `get_er_credentials_from_destination(integration_id)` to resolve the EarthRanger `base_url` and bearer token from the connection's first destination (via `GundiClient.get_connection_details` → `get_integration_details` → `auth` config).
 2. Reads `last_execution` from Redis state; falls back to `now - lookback_hours` on first run.
-3. Fetches EarthRanger events via `AsyncERClient.get_events(updated_since=..., event_type=<ids>)`.
-   Event-type slugs (e.g. `wildlife_sighting`) are resolved to UUIDs first via `AsyncERClient.get_event_type(slug, version="v2.0")` — the ER API requires IDs, not slugs.
+3. Resolves the configured event-type slugs (e.g. `wildlife_sighting`) to UUIDs via `resolve_event_type_ids()` (which calls `AsyncERClient.get_event_type(slug, version="v2.0")`) — the ER API requires IDs, not slugs. A slug that doesn't exist on the ER site returns a 404 (`ERClientNotFound`); rather than aborting the run, it is collected into a `missing` list, logged as a **WARNING** in the Activity Log, and skipped so the remaining configured types are still processed. Because the action runs every minute, the missing-type warning is throttled to at most once per hour per destination (`MISSING_EVENT_TYPE_WARNING_INTERVAL`), tracked via a `last_missing_warning` timestamp in the destination's Redis state. If *none* of the configured slugs resolve on a destination, that destination's fetch is skipped entirely (so we never accidentally pull every event) and its state is left unchanged so the window is retried once the config is corrected.
+   Then fetches events via `get_events(updated_since=..., event_type_ids=<resolved ids>)`.
 4. Skips events whose `event_details` already contain `africam_event_url` (already processed).
 5. POSTs each remaining event to `POST {africam_api_url}/events/webhook` with a `{"event_type": "event_update", "data": {...}}` envelope. Africam returns `{"status": "updated", "eventId": "<uuid>"}`.
 6. Builds the Africam gallery URL from `africam_event_url_template.format(africam_event_id=...)` and PATCHes it into the EarthRanger event's `event_details` as `africam_event_url`. Per-event errors are caught so one failure doesn't abort the batch.
@@ -103,7 +103,7 @@ Tests use `pytest-asyncio` and `pytest-mock`. Framework-level tests are in `app/
 - `app/actions/tests/test_handlers.py` — handler behaviour, config validation, URL template validator
 - `app/services/tests/test_earthranger.py` — slug-to-ID resolution, pagination, patch delegation
 
-When testing the handler, mock `app.actions.handlers.get_er_credentials_from_destination`, `app.actions.handlers.get_events`, `app.actions.handlers.post_event_to_africam`, `app.actions.handlers.patch_event`, `app.actions.handlers.state_manager`, and `app.services.activity_logger.publish_event`.
+When testing the handler, mock `app.actions.handlers.get_er_credentials_from_destination`, `app.actions.handlers.resolve_event_type_ids`, `app.actions.handlers.get_events`, `app.actions.handlers.post_event_to_africam`, `app.actions.handlers.patch_event`, `app.actions.handlers.state_manager`, and `app.services.activity_logger.publish_event`.
 
 ## Key env vars
 

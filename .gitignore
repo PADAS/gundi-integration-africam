@@ -136,3 +136,5 @@ dmypy.json
 .vscode
 
 sample-docs
+local/.env.production
+local/.env.stage

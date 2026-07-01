@@ -6,13 +6,17 @@ from gundi_core.events import LogLevel
 from app.services.action_scheduler import crontab_schedule
 from app.services.activity_logger import activity_logger, log_action_activity
 from app.services.africam import post_event as post_event_to_africam
-from app.services.earthranger import get_events, patch_event
+from app.services.earthranger import get_events, patch_event, resolve_event_type_ids
 from app.services.gundi import get_er_credentials_from_destinations
 from app.services.state import IntegrationStateManager
 from .configurations import AfricamActionConfiguration
 
 logger = logging.getLogger(__name__)
 state_manager = IntegrationStateManager()
+
+# Missing event types are re-checked every minute, but we only surface the warning
+# in the Activity Log at most once per destination within this interval to avoid noise.
+MISSING_EVENT_TYPE_WARNING_INTERVAL = timedelta(hours=1)
 
 
 @crontab_schedule("* * * * *")
@@ -43,6 +47,50 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
 
         now = datetime.now(timezone.utc)
 
+        # Resolve configured event-type slugs to IDs. Slugs that don't exist on this
+        # ER site (404) are reported as missing rather than aborting the run.
+        resolved_ids, missing_slugs = await resolve_event_type_ids(
+            api_url=er_base_url,
+            token=er_token,
+            slugs=action_config.event_types,
+        )
+
+        if missing_slugs:
+            last_warned = state.get("last_missing_warning")
+            warning_due = (
+                last_warned is None
+                or now - datetime.fromisoformat(last_warned) >= MISSING_EVENT_TYPE_WARNING_INTERVAL
+            )
+            if warning_due:
+                await log_action_activity(
+                    integration_id=integration_id,
+                    action_id="process_new_events",
+                    title=(
+                        f"Configured event type(s) not found on {er_base_url}, skipping: "
+                        f"{', '.join(missing_slugs)}"
+                    ),
+                    level=LogLevel.WARNING,
+                    data={"er_base_url": er_base_url, "missing_event_types": missing_slugs},
+                )
+                # Record when we warned so we throttle repeat warnings for this destination.
+                state = {**state, "last_missing_warning": now.isoformat()}
+
+        if action_config.event_types and not resolved_ids:
+            # None of the configured event types exist on this site; skip fetching
+            # entirely so we don't pull every event. Persist state (to keep the throttle
+            # timestamp) but leave last_execution unchanged so the window is retried
+            # once the configuration is corrected.
+            logger.warning(
+                f"No configured event types resolved on {er_base_url}; skipping fetch"
+            )
+            await state_manager.set_state(
+                integration_id=integration_id,
+                action_id="process_new_events",
+                source_id=er_base_url,
+                state=state,
+            )
+            continue
+
         await log_action_activity(
             integration_id=integration_id,
             action_id="process_new_events",
@@ -59,7 +107,7 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
             api_url=er_base_url,
             token=er_token,
             updated_since=updated_since,
-            event_types=action_config.event_types,
+            event_type_ids=resolved_ids,
         )
         logger.info(
             f"Fetched {len(events)} event(s) from {er_base_url} for integration {integration_id}"
@@ -119,12 +167,13 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
                 logger.exception(f"Error processing ER event {er_event_id}: {e}")
                 errors += 1
 
-        # Persist the fetch timestamp so the next run is incremental for this destination
+        # Persist the fetch timestamp so the next run is incremental for this destination.
+        # Merge onto existing state so the missing-event-type warning throttle survives.
         await state_manager.set_state(
             integration_id=integration_id,
             action_id="process_new_events",
             source_id=er_base_url,
-            state={"last_execution": now.isoformat()},
+            state={**state, "last_execution": now.isoformat()},
         )
 
         total_fetched += len(events)

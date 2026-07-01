@@ -3,7 +3,9 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.earthranger import get_events, patch_event
+from erclient import ERClientNotFound
+
+from app.services.earthranger import get_events, patch_event, resolve_event_type_ids
 
 
 def async_return(result):
@@ -46,46 +48,94 @@ def mock_er_client():
     return client
 
 
+# ---------------------------------------------------------------------------
+# resolve_event_type_ids
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
-async def test_get_events_resolves_slugs_to_ids(mock_er_client):
+async def test_resolve_event_type_ids_resolves_slugs(mock_er_client):
+    with patch("app.services.earthranger._make_client", return_value=mock_er_client):
+        resolved, missing = await resolve_event_type_ids(
+            ER_API_URL, ER_TOKEN, ["wildlife_sighting"]
+        )
+
+    mock_er_client.get_event_type.assert_called_once_with("wildlife_sighting", version="v2.0")
+    assert resolved == [WILDLIFE_SIGHTING_ID]
+    assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_event_type_ids_resolves_multiple_slugs(mock_er_client):
+    mock_er_client.get_event_type = AsyncMock(
+        side_effect=lambda slug, **kw: {
+            "id": WILDLIFE_SIGHTING_ID if slug == "wildlife_sighting" else ELEPHANT_SIGHTING_ID,
+            "value": slug,
+        }
+    )
+
+    with patch("app.services.earthranger._make_client", return_value=mock_er_client):
+        resolved, missing = await resolve_event_type_ids(
+            ER_API_URL, ER_TOKEN, ["wildlife_sighting", "elephant_sighting"]
+        )
+
+    assert resolved == [WILDLIFE_SIGHTING_ID, ELEPHANT_SIGHTING_ID]
+    assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_event_type_ids_skips_missing_slug(mock_er_client):
+    """A slug that doesn't exist on the ER site (404) is reported as missing, not raised."""
+    def _side_effect(slug, **kw):
+        if slug == "transgressions_africam":
+            raise ERClientNotFound()
+        return {"id": WILDLIFE_SIGHTING_ID, "value": slug}
+
+    mock_er_client.get_event_type = AsyncMock(side_effect=_side_effect)
+
+    with patch("app.services.earthranger._make_client", return_value=mock_er_client):
+        resolved, missing = await resolve_event_type_ids(
+            ER_API_URL, ER_TOKEN, ["wildlife_sighting", "transgressions_africam"]
+        )
+
+    assert resolved == [WILDLIFE_SIGHTING_ID]
+    assert missing == ["transgressions_africam"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_event_type_ids_all_missing(mock_er_client):
+    mock_er_client.get_event_type = AsyncMock(side_effect=ERClientNotFound())
+
+    with patch("app.services.earthranger._make_client", return_value=mock_er_client):
+        resolved, missing = await resolve_event_type_ids(
+            ER_API_URL, ER_TOKEN, ["transgressions_africam"]
+        )
+
+    assert resolved == []
+    assert missing == ["transgressions_africam"]
+
+
+# ---------------------------------------------------------------------------
+# get_events
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_events_filters_by_event_type_ids(mock_er_client):
     with patch("app.services.earthranger._make_client", return_value=mock_er_client):
         events = await get_events(
             api_url=ER_API_URL,
             token=ER_TOKEN,
             updated_since=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            event_types=["wildlife_sighting"],
+            event_type_ids=[WILDLIFE_SIGHTING_ID, ELEPHANT_SIGHTING_ID],
         )
 
-    mock_er_client.get_event_type.assert_called_once_with("wildlife_sighting", version="v2.0")
-
+    mock_er_client.get_event_type.assert_not_called()
     call_kwargs = mock_er_client.get_events.call_args.kwargs
-    assert call_kwargs["event_type"] == WILDLIFE_SIGHTING_ID
+    assert call_kwargs["event_type"] == f"{WILDLIFE_SIGHTING_ID},{ELEPHANT_SIGHTING_ID}"
     assert events == [MOCK_EVENT]
 
 
 @pytest.mark.asyncio
-async def test_get_events_resolves_multiple_slugs(mock_er_client):
-    mock_er_client.get_event_type = AsyncMock(
-        side_effect=lambda slug, **kw: {"id": WILDLIFE_SIGHTING_ID if slug == "wildlife_sighting" else ELEPHANT_SIGHTING_ID, "value": slug}
-    )
-    mock_er_client.get_events = MagicMock(return_value=_async_gen([]))
-
-    with patch("app.services.earthranger._make_client", return_value=mock_er_client):
-        await get_events(
-            api_url=ER_API_URL,
-            token=ER_TOKEN,
-            updated_since=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            event_types=["wildlife_sighting", "elephant_sighting"],
-        )
-
-    assert mock_er_client.get_event_type.call_count == 2
-    call_kwargs = mock_er_client.get_events.call_args.kwargs
-    assert WILDLIFE_SIGHTING_ID in call_kwargs["event_type"]
-    assert ELEPHANT_SIGHTING_ID in call_kwargs["event_type"]
-
-
-@pytest.mark.asyncio
-async def test_get_events_without_event_types_skips_resolution(mock_er_client):
+async def test_get_events_without_event_type_ids_skips_filter(mock_er_client):
     mock_er_client.get_events = MagicMock(return_value=_async_gen([]))
 
     with patch("app.services.earthranger._make_client", return_value=mock_er_client):
@@ -95,7 +145,6 @@ async def test_get_events_without_event_types_skips_resolution(mock_er_client):
             updated_since=datetime(2024, 1, 1, tzinfo=timezone.utc),
         )
 
-    mock_er_client.get_event_type.assert_not_called()
     call_kwargs = mock_er_client.get_events.call_args.kwargs
     assert "event_type" not in call_kwargs
 

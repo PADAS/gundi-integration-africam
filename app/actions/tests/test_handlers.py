@@ -1,9 +1,10 @@
 import asyncio
 import pydantic
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, AsyncMock
 
+from gundi_core.events import LogLevel
 from gundi_core.schemas.v2 import Integration
 
 from app.actions.configurations import AfricamActionConfiguration
@@ -38,11 +39,23 @@ def africam_config():
     )
 
 
+WILDLIFE_SIGHTING_ID = "uuid-wildlife-sighting"
+
+
 @pytest.fixture
 def mock_get_er_credentials(mocker):
     return mocker.patch(
         "app.actions.handlers.get_er_credentials_from_destinations",
         new=AsyncMock(return_value=[(ER_API_URL, ER_TOKEN)]),
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_resolve_event_types(mocker):
+    """By default all configured event types resolve cleanly with none missing."""
+    return mocker.patch(
+        "app.actions.handlers.resolve_event_type_ids",
+        new=AsyncMock(return_value=([WILDLIFE_SIGHTING_ID], [])),
     )
 
 
@@ -342,6 +355,124 @@ async def test_pull_events_uses_er_credentials_from_destination(
     patch_kwargs = mock_patch.call_args.kwargs
     assert patch_kwargs["api_url"] == ER_API_URL
     assert patch_kwargs["token"] == ER_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_pull_events_warns_on_missing_event_type_and_continues(
+    mocker, mock_integration, africam_config, er_events, africam_response,
+    mock_state_manager, mock_get_er_credentials, mock_resolve_event_types
+):
+    """A configured event type missing on the ER site is logged as a WARNING (not an
+    error), and the event types that do resolve are still processed."""
+    mock_resolve_event_types.return_value = ([WILDLIFE_SIGHTING_ID], ["transgressions_africam"])
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+    mock_get_events = mocker.patch(
+        "app.actions.handlers.get_events", new=AsyncMock(return_value=er_events)
+    )
+    mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+    mock_log = mocker.patch("app.actions.handlers.log_action_activity", new=AsyncMock())
+
+    result = await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    # Processing of the resolved type continued normally, no errors recorded.
+    assert result["events_forwarded"] == 2
+    assert result["errors"] == 0
+    # get_events was still called, filtering by the resolved id only.
+    assert mock_get_events.call_args.kwargs["event_type_ids"] == [WILDLIFE_SIGHTING_ID]
+
+    # A WARNING activity-log entry naming the missing type was emitted.
+    warning_calls = [
+        c for c in mock_log.call_args_list if c.kwargs.get("level") == LogLevel.WARNING
+    ]
+    assert any("transgressions_africam" in c.kwargs["title"] for c in warning_calls)
+
+
+@pytest.mark.asyncio
+async def test_pull_events_throttles_missing_event_type_warning(
+    mocker, mock_integration, africam_config, er_events, africam_response,
+    mock_state_manager, mock_get_er_credentials, mock_resolve_event_types
+):
+    """A missing event type warning is suppressed if one was already logged within the
+    last hour, but the resolved types are still processed."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={"last_missing_warning": recent})
+    mock_resolve_event_types.return_value = ([WILDLIFE_SIGHTING_ID], ["transgressions_africam"])
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+    mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=er_events))
+    mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+    mock_log = mocker.patch("app.actions.handlers.log_action_activity", new=AsyncMock())
+
+    result = await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    assert result["events_forwarded"] == 2
+    # No WARNING this run — throttled by the recent timestamp.
+    missing_warnings = [
+        c for c in mock_log.call_args_list
+        if c.kwargs.get("level") == LogLevel.WARNING and "transgressions_africam" in c.kwargs["title"]
+    ]
+    assert missing_warnings == []
+
+
+@pytest.mark.asyncio
+async def test_pull_events_warns_again_after_throttle_interval(
+    mocker, mock_integration, africam_config, er_events, africam_response,
+    mock_state_manager, mock_get_er_credentials, mock_resolve_event_types
+):
+    """Once more than an hour has passed since the last warning, it is logged again
+    and the new timestamp is persisted to state."""
+    stale = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={"last_missing_warning": stale})
+    mock_resolve_event_types.return_value = ([WILDLIFE_SIGHTING_ID], ["transgressions_africam"])
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+    mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=er_events))
+    mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+    mock_log = mocker.patch("app.actions.handlers.log_action_activity", new=AsyncMock())
+
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    missing_warnings = [
+        c for c in mock_log.call_args_list
+        if c.kwargs.get("level") == LogLevel.WARNING and "transgressions_africam" in c.kwargs["title"]
+    ]
+    assert len(missing_warnings) == 1
+    # The refreshed warning timestamp is persisted alongside last_execution.
+    saved_state = mock_state_manager.set_state.call_args.kwargs["state"]
+    assert "last_missing_warning" in saved_state
+    assert saved_state["last_missing_warning"] != stale
+
+
+@pytest.mark.asyncio
+async def test_pull_events_skips_destination_when_no_event_types_resolve(
+    mocker, mock_integration, africam_config, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_event_types
+):
+    """When none of the configured event types exist on the ER site, the fetch is
+    skipped entirely (so we don't pull every event), with a WARNING logged."""
+    mock_resolve_event_types.return_value = ([], ["transgressions_africam"])
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+    mock_get_events = mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=[]))
+    mock_post = mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock())
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+    mock_log = mocker.patch("app.actions.handlers.log_action_activity", new=AsyncMock())
+
+    result = await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    mock_get_events.assert_not_called()
+    mock_post.assert_not_called()
+    assert result["events_fetched"] == 0
+    assert result["events_forwarded"] == 0
+    assert result["errors"] == 0
+
+    warning_calls = [
+        c for c in mock_log.call_args_list if c.kwargs.get("level") == LogLevel.WARNING
+    ]
+    assert any("transgressions_africam" in c.kwargs["title"] for c in warning_calls)
 
 
 # ---------------------------------------------------------------------------

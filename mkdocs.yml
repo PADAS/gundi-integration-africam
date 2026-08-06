@@ -1,0 +1,35 @@
+site_name: Gundi Africam Action Runner
+site_description: What the Africam action runner does and how to configure it.
+repo_url: https://github.com/PADAS/gundi-integration-africam
+repo_name: PADAS/gundi-integration-africam
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: green
+      accent: green
+  features:
+    - navigation.top
+    - content.code.copy
+    - toc.integrate
+
+nav:
+  - Overview: index.md
+  - Tutorial — Set Up the Africam Connection: tutorial-setup.md
+  - Configuration: configuration.md
+  - Troubleshooting: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+# docs_dir defaults to docs/. That folder also holds the Postman collection
+# and superpowers specs/plans — exclude them so only the curated pages are
+# built (the repo is public).
+exclude_docs: |
+  *.json
+  superpowers/

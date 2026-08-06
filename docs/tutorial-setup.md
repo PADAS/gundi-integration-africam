@@ -71,11 +71,12 @@ is nothing to start.
 ## Step 4 — Verify the first run
 
 Open the connection's **Activity Log** in the Gundi portal. Within a couple
-of minutes you should see, per EarthRanger site:
+of minutes you should see:
 
 - *"Fetching EarthRanger events from https://yoursite.pamdas.org updated
-  since …"*, then
-- *"Forwarded N event(s) to Africam (0 error(s))"*.
+  since …"* — one such line per EarthRanger site on the connection, then
+- *"Forwarded N event(s) to Africam (0 error(s))"* — a single summary for
+  the run, aggregated across all of the connection's sites.
 
 If instead you see a warning like *"Configured event type(s) not found …"*,
 one of your event-type slugs doesn't exist on that site — see

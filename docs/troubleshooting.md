@@ -10,8 +10,8 @@ portal — every run logs what it fetched and forwarded there. For deeper
 digging, the runner's Cloud Run logs:
 
 ```bash
-gcloud run services logs read africam-actions-runner \
-  --project=<project> --region=us-central1 --limit=100
+gcloud run services logs read <service> \
+  --project=<project> --region=<region> --limit=100
 ```
 
 [← Overview](index.md) · [Configuration](configuration.md)
@@ -114,8 +114,10 @@ compare it with the default in
   forget. If the Activity Log shows no runs at all, the integration may be
   disabled, or the runner isn't deployed/registered; check the Cloud Run
   service.
-- Two consecutive log lines *"Fetching EarthRanger events ..."* with no
-  *"Forwarded ..."* summary in between means the run crashed mid-way — the
-  stack trace is in the Cloud Run logs.
+- A run logs one *"Fetching EarthRanger events ..."* line per site,
+  followed by a single aggregated *"Forwarded ..."* summary for the whole
+  run. A run whose *"Fetching ..."* line(s) are never followed by a
+  *"Forwarded ..."* summary means it crashed mid-way — the stack trace is
+  in the Cloud Run logs.
 
 [← Overview](index.md) · [Configuration](configuration.md)

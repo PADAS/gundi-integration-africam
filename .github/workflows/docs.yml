@@ -1,0 +1,42 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', 'mkdocs.yml', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['docs/**', 'mkdocs.yml', '.github/workflows/docs.yml']
+  # Allow manual triggers from the Actions UI.
+  workflow_dispatch:
+
+# gh-deploy commits the built site to the gh-pages branch.
+permissions:
+  contents: write
+
+# Serialize deploys so two pushes to main in quick succession don't race on
+# gh-deploy --force.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gh-deploy needs full history to commit to gh-pages.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install mkdocs-material==9.7.6
+      # --strict catches broken internal links and pages missing from the nav.
+      # Runs on PRs too (validation); the deploy step below is gated to main.
+      - name: Build site
+        run: mkdocs build --strict
+      # Publishes to the gh-pages branch (Pages source: Deploy from a branch),
+      # matching gundi-client / earthranger-smart-utils.
+      - name: Deploy to gh-pages
+        if: github.ref == 'refs/heads/main'
+        run: mkdocs gh-deploy --force

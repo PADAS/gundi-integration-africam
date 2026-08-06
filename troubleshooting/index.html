@@ -494,8 +494,8 @@
 diagnose them. Start with the connection's <strong>Activity Log</strong> in the Gundi
 portal — every run logs what it fetched and forwarded there. For deeper
 digging, the runner's Cloud Run logs:</p>
-<div class="highlight"><pre><span></span><code>gcloud<span class="w"> </span>run<span class="w"> </span>services<span class="w"> </span>logs<span class="w"> </span><span class="nb">read</span><span class="w"> </span>&lt;service&gt;<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--project<span class="o">=</span>&lt;project&gt;<span class="w"> </span>--region<span class="o">=</span>&lt;region&gt;<span class="w"> </span>--limit<span class="o">=</span><span class="m">100</span>
+<div class="highlight"><pre><span></span><code>gcloud<span class="w"> </span>run<span class="w"> </span>services<span class="w"> </span>logs<span class="w"> </span><span class="nb">read</span><span class="w"> </span>africam-actions-runner<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--project<span class="o">=</span>&lt;project&gt;<span class="w"> </span>--region<span class="o">=</span>us-central1<span class="w"> </span>--limit<span class="o">=</span><span class="m">100</span>
 </code></pre></div>
 <p><a href="../">← Overview</a> · <a href="../configuration/">Configuration</a></p>
 <hr />
@@ -573,11 +573,9 @@ compare it with the default in
   forget. If the Activity Log shows no runs at all, the integration may be
   disabled, or the runner isn't deployed/registered; check the Cloud Run
   service.</li>
-<li>A run logs one <em>"Fetching EarthRanger events ..."</em> line per site,
-  followed by a single aggregated <em>"Forwarded ..."</em> summary for the whole
-  run. A run whose <em>"Fetching ..."</em> line(s) are never followed by a
-  <em>"Forwarded ..."</em> summary means it crashed mid-way — the stack trace is
-  in the Cloud Run logs.</li>
+<li>Two consecutive log lines <em>"Fetching EarthRanger events ..."</em> with no
+  <em>"Forwarded ..."</em> summary in between means the run crashed mid-way — the
+  stack trace is in the Cloud Run logs.</li>
 </ul>
 <p><a href="../">← Overview</a> · <a href="../configuration/">Configuration</a></p>
 

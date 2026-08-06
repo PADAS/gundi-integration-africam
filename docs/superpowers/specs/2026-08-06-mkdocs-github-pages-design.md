@@ -74,9 +74,10 @@ restructuring.
 ### index.md — Overview
 
 - What the integration is: a Gundi v2 action runner that pulls events from
-  an EarthRanger site every minute, forwards matching event types to the
-  Africam API, and patches each forwarded ER event with the resulting
-  Africam gallery URL (`africam_event_url` in `event_details`).
+  one or more EarthRanger sites every minute (all EarthRanger destinations
+  on the connection), forwards matching event types to the Africam API, and
+  patches each forwarded ER event with the resulting Africam gallery URL
+  (`africam_event_url` in `event_details`).
 - One Cloud Run service handles all customer integrations of this type;
   each customer gets their own configuration in the Gundi portal.
 - Data-flow summary: ER events → `POST {africam_api_url}/events/webhook`
@@ -105,8 +106,9 @@ Step-by-step, text-only:
   `lookback_hours` (1–168, range widget), `africam_event_url_template`
   (must be `https://` and contain `{africam_event_id}`).
 - Callout: EarthRanger credentials (`base_url`, token) are **not** in the
-  action config — they are resolved at runtime from the connection's first
-  destination integration's auth config.
+  action config — they are resolved at runtime from the connection's
+  destination integrations' auth configs; every EarthRanger destination on
+  the connection is processed, each with independent Redis state.
 - The action runs on a `* * * * *` crontab; `last_execution` state is kept
   in Redis, with `lookback_hours` used only for the first run.
 

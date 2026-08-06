@@ -563,11 +563,12 @@ is missing here, every run fails with <em>"No auth configuration found"</em> (se
 is nothing to start.</p>
 <h2 id="step-4-verify-the-first-run">Step 4 — Verify the first run<a class="headerlink" href="#step-4-verify-the-first-run" title="Permanent link">&para;</a></h2>
 <p>Open the connection's <strong>Activity Log</strong> in the Gundi portal. Within a couple
-of minutes you should see, per EarthRanger site:</p>
+of minutes you should see:</p>
 <ul>
 <li><em>"Fetching EarthRanger events from https://yoursite.pamdas.org updated
-  since …"</em>, then</li>
-<li><em>"Forwarded N event(s) to Africam (0 error(s))"</em>.</li>
+  since …"</em> — one such line per EarthRanger site on the connection, then</li>
+<li><em>"Forwarded N event(s) to Africam (0 error(s))"</em> — a single summary for
+  the run, aggregated across all of the connection's sites.</li>
 </ul>
 <p>If instead you see a warning like <em>"Configured event type(s) not found …"</em>,
 one of your event-type slugs doesn't exist on that site — see

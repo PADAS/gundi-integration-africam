@@ -1,0 +1,91 @@
+{
+  "info": {
+    "_postman_id": "ff2ed928-f29e-4916-81ee-4ec0b55659de",
+    "name": "Africam - EarthRanger Webhook",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "19043249"
+  },
+  "item": [
+    {
+      "name": "EarthRanger - Webhook",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{africam_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"event_type\": \"event_update\",\n    \"data\": {\n        \"id\": \"er-event-1234gbhnj\",\n        \"event_type\": \"wildlife_sighting\",\n        \"title\": \"Something new\",\n        \"location\": {\n            \"latitude\": -1.4061,\n            \"longitude\": 35.1425\n        },\n        \"event_details\": {\n            \"species\": \"white rhino\",\n            \"count\": 3,\n            \"priority\": \"critical\"\n        }\n    }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "https://ranger-media.africam.com/events/webhook",
+          "protocol": "https",
+          "host": [
+            "ranger-media",
+            "africam",
+            "com"
+          ],
+          "path": [
+            "events",
+            "webhook"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{africam_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "africam_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ]
+}

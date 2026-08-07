@@ -5,7 +5,7 @@ title: Tutorial — Set Up the Africam Connection
 # Set up the Africam connection
 
 This tutorial walks you through connecting one or more EarthRanger sites to
-Africam in the Gundi portal, so that new wildlife-sighting reports get an
+Africam in the Gundi portal, so that new wildlife sighting reports get an
 Africam gallery link attached automatically — within about a minute of being
 reported.
 

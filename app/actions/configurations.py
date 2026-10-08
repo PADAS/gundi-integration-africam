@@ -71,6 +71,7 @@ class AfricamActionConfiguration(PullActionConfiguration):
             "event_types",
             "lookback_hours",
             "africam_event_url_template",
+            "run_on_schedule",
         ]
     )
 

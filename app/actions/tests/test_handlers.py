@@ -830,3 +830,14 @@ def test_ui_schema_keeps_field_widgets_and_order_alongside_the_annotation():
 
     assert ui_schema["africam_token"]["ui:widget"] == "password"
     assert ui_schema["ui:order"][0] == "africam_api_url"
+
+
+def test_ui_order_covers_every_schema_property():
+    """rjsf refuses to render a form whose ui:order omits a property (unless it
+    lists "*"), so a field added to the PullActionConfiguration base class must
+    also appear in our explicit order. Regression: run_on_schedule, 2026-10-08."""
+    properties = set(AfricamActionConfiguration.schema()["properties"])
+    order = AfricamActionConfiguration.ui_schema()["ui:order"]
+
+    assert properties - set(order) == set()
+    assert order[-1] == "run_on_schedule"

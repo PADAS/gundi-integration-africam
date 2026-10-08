@@ -68,6 +68,7 @@ Runs on a `* * * * *` crontab (every minute). For each execution:
 | `event_types` | `["wildlife_sighting"]` | ER event-type slugs to forward. Each item is annotated with `gundi:reference` (`list_event_types`, `target: "destination"`), so the portal offers the destination ER site's event types as a dropdown once a destination is attached; free text stays allowed |
 | `lookback_hours` | `1` | Initial fetch window and hard cap on every run's window (1–168 h); range widget |
 | `africam_event_url_template` | `https://ranger-media.africam.com/gallery/{africam_event_id}` | Must be `https://` and contain `{africam_event_id}`; validated via `regex` (emits `pattern` in JSON schema for browser validation) and a `@validator` that checks format-string correctness |
+| `run_on_schedule` | `True` | Inherited from `PullActionConfiguration` (upstream template). Must stay listed in `ui_global_options.order`, or rjsf refuses to render the form (`uiSchema order list does not contain property`); a test enforces coverage |
 
 EarthRanger credentials (`base_url`, token) are **not** in the action config — they are read from the connection's destination integration at runtime.
 

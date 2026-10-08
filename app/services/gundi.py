@@ -224,7 +224,7 @@ async def get_er_credentials_from_destinations(integration_id: str) -> List[Tupl
     # An ephemeral run's synthetic integration has no portal row to read from.
     _block_if_ephemeral("get_er_credentials_from_destinations")
     async with GundiClient() as client:
-        for attempt in stamina.retry_context(**GUNDI_API_RETRY):
+        async for attempt in stamina.retry_context(**GUNDI_API_RETRY):
             with attempt:
                 connection = await client.get_connection_details(str(integration_id))
 
@@ -233,7 +233,7 @@ async def get_er_credentials_from_destinations(integration_id: str) -> List[Tupl
 
         credentials = []
         for destination in connection.destinations:
-            for attempt in stamina.retry_context(**GUNDI_API_RETRY):
+            async for attempt in stamina.retry_context(**GUNDI_API_RETRY):
                 with attempt:
                     dest_integration = await client.get_integration_details(str(destination.id))
 

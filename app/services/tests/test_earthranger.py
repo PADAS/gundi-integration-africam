@@ -130,7 +130,10 @@ async def test_get_events_filters_by_event_type_ids(mock_er_client):
 
     mock_er_client.get_event_type.assert_not_called()
     call_kwargs = mock_er_client.get_events.call_args.kwargs
-    assert call_kwargs["event_type"] == f"{WILDLIFE_SIGHTING_ID},{ELEPHANT_SIGHTING_ID}"
+    # ER reads ``event_type`` with ``getlist`` and validates each value as a UUID,
+    # so the IDs must be passed as a list (encoded as repeated query params), never
+    # joined with commas.
+    assert call_kwargs["event_type"] == [WILDLIFE_SIGHTING_ID, ELEPHANT_SIGHTING_ID]
     assert events == [MOCK_EVENT]
 
 

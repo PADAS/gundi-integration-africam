@@ -58,8 +58,9 @@ Check in order:
 
 1. **Is its type configured?** Only events whose `event_type` is in **Event
    Types** are forwarded.
-2. **Was it updated inside the fetch window?** The first run only reaches
-   back `lookback_hours`. Touching the event in EarthRanger (any edit)
+2. **Was it updated inside the fetch window?** No run reaches back further
+   than `lookback_hours`, so events that went stale during an outage are not
+   backfilled automatically. Touching the event in EarthRanger (any edit)
    updates it and gets it re-fetched on the next run.
 3. **Does it already have `africam_event_url`?** Then the runner considers
    it processed and will never re-forward it. To force a re-send, delete the

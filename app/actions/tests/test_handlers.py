@@ -225,8 +225,8 @@ async def test_pull_events_continues_after_africam_error(
 async def test_pull_events_uses_state_for_updated_since(
     mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
 ):
-    """When state has a last_execution, it should be used as the updated_since window."""
-    last_run = "2024-06-01T12:00:00+00:00"
+    """When state has a recent last_execution, it should be used as the updated_since window."""
+    last_run = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     mock_state_manager.get_state = AsyncMock(return_value={"last_execution": last_run})
     mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
 
@@ -241,6 +241,111 @@ async def test_pull_events_uses_state_for_updated_since(
 
     call_kwargs = mock_get_events.call_args.kwargs
     assert call_kwargs["updated_since"] == datetime.fromisoformat(last_run)
+
+
+@pytest.mark.asyncio
+async def test_pull_events_caps_updated_since_at_lookback_hours(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
+):
+    """A stale last_execution must not widen the window beyond lookback_hours."""
+    stale_run = "2024-06-01T12:00:00+00:00"
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": stale_run})
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+
+    mock_get_events = mocker.patch(
+        "app.actions.handlers.get_events", new=AsyncMock(return_value=[])
+    )
+    mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+
+    before = datetime.now(timezone.utc)
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+    after = datetime.now(timezone.utc)
+
+    updated_since = mock_get_events.call_args.kwargs["updated_since"]
+    lookback = timedelta(hours=africam_config.lookback_hours)
+    assert before - lookback <= updated_since <= after - lookback
+
+
+def _cap_warnings(mock_log):
+    return [
+        c for c in mock_log.call_args_list
+        if c.kwargs.get("level") == LogLevel.WARNING and "capped" in c.kwargs["title"]
+    ]
+
+
+def _patch_pipeline(mocker, mock_state_manager, africam_response):
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+    mock_get_events = mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=[]))
+    mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+    mock_log = mocker.patch("app.actions.handlers.log_action_activity", new=AsyncMock())
+    return mock_get_events, mock_log
+
+
+@pytest.mark.asyncio
+async def test_pull_events_warns_when_lookback_cap_engages(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
+):
+    """Skipping events because last_execution is older than lookback_hours must be
+    visible to operators as a WARNING in the Activity Log."""
+    stale_run = "2024-06-01T12:00:00+00:00"
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": stale_run})
+    _, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    warnings = _cap_warnings(mock_log)
+    assert len(warnings) == 1
+    assert warnings[0].kwargs["data"]["last_execution"] == stale_run
+    assert warnings[0].kwargs["data"]["er_base_url"] == ER_API_URL
+
+
+@pytest.mark.asyncio
+async def test_pull_events_no_cap_warning_for_recent_last_execution(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
+):
+    recent_run = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": recent_run})
+    _, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    assert _cap_warnings(mock_log) == []
+
+
+@pytest.mark.asyncio
+async def test_pull_events_no_cap_warning_when_no_event_types_resolve(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_event_types
+):
+    """A destination stuck in the no-types-resolved branch keeps its stale
+    last_execution forever; it must not emit the cap warning every minute."""
+    mock_resolve_event_types.return_value = ([], ["transgressions_africam"])
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": "2024-06-01T12:00:00+00:00"})
+    mock_get_events, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    mock_get_events.assert_not_called()
+    assert _cap_warnings(mock_log) == []
+
+
+@pytest.mark.asyncio
+async def test_pull_events_accepts_naive_last_execution(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
+):
+    """A tz-naive last_execution (hand-seeded state) is treated as UTC rather than
+    aborting the run with a naive/aware comparison error."""
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": "2024-06-01T12:00:00"})
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+
+    updated_since = mock_get_events.call_args.kwargs["updated_since"]
+    assert updated_since.tzinfo is not None
 
 
 @pytest.mark.asyncio

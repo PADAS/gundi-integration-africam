@@ -19,7 +19,7 @@ a `* * * * *` crontab — once a minute, automatically.
 | **Africam API URL** | — | `https://ranger-media.africam.com` | Base URL of the Africam API. Events are POSTed to `{url}/events/webhook`. |
 | **Africam API Token** | yes | — | Bearer token for Africam. Stored as a secret (password field). |
 | **Event Types** | — | `["wildlife_sighting"]` | EarthRanger event-type slugs to forward. Anything not in this list is ignored. |
-| **Lookback Hours** | — | `1` (1–168) | How far back the **first** run fetches. Ignored once the action has run, because the window then continues from the previous run. |
+| **Lookback Hours** | — | `1` (1–168) | How far back the **first** run fetches, and the **maximum** any later run reaches back. The window normally continues from the previous run, but never further back than this. |
 | **Africam Event URL Template** | — | `https://ranger-media.africam.com/gallery/{africam_event_id}` | Format string for the gallery URL written back to EarthRanger. Must start with `https://` and contain `{africam_event_id}` — both are validated when you save. |
 
 ## Where the EarthRanger credentials come from
@@ -40,7 +40,13 @@ runner's Redis state (keyed by the destination's base URL):
 
 - **First run** (no state yet): fetch events updated in the last
   `lookback_hours`.
-- **Every later run**: fetch events updated since the previous run started.
+- **Every later run**: fetch events updated since the previous run started,
+  but never further back than `lookback_hours`. A stale `last_execution`
+  (for example after a long outage or a misconfigured event type) is capped
+  rather than triggering an unbounded backfill. When that happens the run logs
+  a one-off **WARNING** naming the skipped range, so you can backfill by
+  editing the affected events (see
+  [Troubleshooting](troubleshooting.md#an-event-never-got-its-gallery-url)).
 
 Because the filter is *updated since*, edits to older events re-fetch them —
 and the already-processed check (below) keeps them from being re-forwarded.

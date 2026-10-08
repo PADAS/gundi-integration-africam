@@ -52,7 +52,10 @@ async def get_events(
     async with _make_client(api_url, token) as client:
         params = {"updated_since": updated_since.isoformat()}
         if event_type_ids:
-            params["event_type"] = ",".join(event_type_ids)
+            # ER reads this param with ``getlist`` and validates each value as a UUID,
+            # so pass a list (httpx encodes it as repeated ``event_type=`` params).
+            # A comma-joined string is rejected with 400 once there are 2+ IDs.
+            params["event_type"] = list(event_type_ids)
 
         async for event in client.get_events(**params):
             events.append(event)

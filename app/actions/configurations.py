@@ -29,7 +29,10 @@ class AfricamActionConfiguration(PullActionConfiguration):
         ge=1,
         le=168,
         title="Lookback Hours",
-        description="How many hours back to look for events on the first run.",
+        description=(
+            "Maximum number of hours to look back for events. Used as the window on "
+            "the first run and as a cap on every later run."
+        ),
         ui_options=UIOptions(widget="range"),
     )
     africam_event_url_template: str = FieldWithUIOptions(

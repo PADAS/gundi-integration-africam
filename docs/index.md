@@ -20,8 +20,8 @@ and this runner processes every EarthRanger destination on that connection.
 Every minute (crontab `* * * * *`), for each EarthRanger site on the
 connection, the `process_new_events` action:
 
-1. Fetches events **updated since the last run** (first run looks back
-   `lookback_hours`).
+1. Fetches events **updated since the last run**, never reaching further
+   back than `lookback_hours` (which is also the first run's window).
 2. Keeps only the configured **event types** (e.g. `wildlife_sighting`) and
    skips events that already carry an `africam_event_url` (already
    processed — the action is idempotent).

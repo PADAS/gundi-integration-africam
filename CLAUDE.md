@@ -51,7 +51,7 @@ python app/register.py --slug <slug> --service-url <url>
 Runs on a `* * * * *` crontab (every minute). For each execution:
 
 1. Calls `get_er_credentials_from_destination(integration_id)` to resolve the EarthRanger `base_url` and bearer token from the connection's first destination (via `GundiClient.get_connection_details` → `get_integration_details` → `auth` config).
-2. Reads `last_execution` from Redis state; falls back to `now - lookback_hours` on first run.
+2. Reads `last_execution` from Redis state and uses `max(last_execution, now - lookback_hours)` as the window start; falls back to `now - lookback_hours` on first run. `lookback_hours` is therefore a hard cap on how far back any run reaches.
 3. Resolves the configured event-type slugs (e.g. `wildlife_sighting`) to UUIDs via `resolve_event_type_ids()` (which calls `AsyncERClient.get_event_type(slug, version="v2.0")`) — the ER API requires IDs, not slugs. A slug that doesn't exist on the ER site returns a 404 (`ERClientNotFound`); rather than aborting the run, it is collected into a `missing` list, logged as a **WARNING** in the Activity Log, and skipped so the remaining configured types are still processed. Because the action runs every minute, the missing-type warning is throttled to at most once per hour per destination (`MISSING_EVENT_TYPE_WARNING_INTERVAL`), tracked via a `last_missing_warning` timestamp in the destination's Redis state. If *none* of the configured slugs resolve on a destination, that destination's fetch is skipped entirely (so we never accidentally pull every event) and its state is left unchanged so the window is retried once the config is corrected.
    Then fetches events via `get_events(updated_since=..., event_type_ids=<resolved ids>)`.
 4. Skips events whose `event_details` already contain `africam_event_url` (already processed).
@@ -66,7 +66,7 @@ Runs on a `* * * * *` crontab (every minute). For each execution:
 | `africam_api_url` | `https://ranger-media.africam.com` | Africam base URL |
 | `africam_token` | required | Bearer token; rendered as password widget |
 | `event_types` | `["wildlife_sighting"]` | ER event-type slugs to forward |
-| `lookback_hours` | `1` | Initial fetch window (1–168 h); range widget |
+| `lookback_hours` | `1` | Initial fetch window and hard cap on every run's window (1–168 h); range widget |
 | `africam_event_url_template` | `https://ranger-media.africam.com/gallery/{africam_event_id}` | Must be `https://` and contain `{africam_event_id}`; validated via `regex` (emits `pattern` in JSON schema for browser validation) and a `@validator` that checks format-string correctness |
 
 EarthRanger credentials (`base_url`, token) are **not** in the action config — they are read from the connection's destination integration at runtime.

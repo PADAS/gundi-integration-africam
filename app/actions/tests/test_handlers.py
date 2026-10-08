@@ -225,8 +225,8 @@ async def test_pull_events_continues_after_africam_error(
 async def test_pull_events_uses_state_for_updated_since(
     mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
 ):
-    """When state has a last_execution, it should be used as the updated_since window."""
-    last_run = "2024-06-01T12:00:00+00:00"
+    """When state has a recent last_execution, it should be used as the updated_since window."""
+    last_run = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     mock_state_manager.get_state = AsyncMock(return_value={"last_execution": last_run})
     mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
 
@@ -241,6 +241,31 @@ async def test_pull_events_uses_state_for_updated_since(
 
     call_kwargs = mock_get_events.call_args.kwargs
     assert call_kwargs["updated_since"] == datetime.fromisoformat(last_run)
+
+
+@pytest.mark.asyncio
+async def test_pull_events_caps_updated_since_at_lookback_hours(
+    mocker, mock_integration, africam_config, africam_response, mock_state_manager, mock_get_er_credentials
+):
+    """A stale last_execution must not widen the window beyond lookback_hours."""
+    stale_run = "2024-06-01T12:00:00+00:00"
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": stale_run})
+    mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
+
+    mock_get_events = mocker.patch(
+        "app.actions.handlers.get_events", new=AsyncMock(return_value=[])
+    )
+    mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
+    mocker.patch("app.actions.handlers.patch_event", new=AsyncMock(return_value={}))
+    mocker.patch("app.services.activity_logger.publish_event", new=AsyncMock())
+
+    before = datetime.now(timezone.utc)
+    await action_process_new_events(integration=mock_integration, action_config=africam_config)
+    after = datetime.now(timezone.utc)
+
+    updated_since = mock_get_events.call_args.kwargs["updated_since"]
+    lookback = timedelta(hours=africam_config.lookback_hours)
+    assert before - lookback <= updated_since <= after - lookback
 
 
 @pytest.mark.asyncio

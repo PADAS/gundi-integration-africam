@@ -40,12 +40,14 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
         state = await state_manager.get_state(
             integration_id, "process_new_events", source_id=er_base_url
         )
-        if last_execution := state.get("last_execution"):
-            updated_since = datetime.fromisoformat(last_execution)
-        else:
-            updated_since = datetime.now(timezone.utc) - timedelta(hours=action_config.lookback_hours)
-
         now = datetime.now(timezone.utc)
+        # Never look back further than lookback_hours, even if the saved
+        # last_execution is stale (e.g. after a long outage or misconfiguration).
+        lookback_floor = now - timedelta(hours=action_config.lookback_hours)
+        if last_execution := state.get("last_execution"):
+            updated_since = max(datetime.fromisoformat(last_execution), lookback_floor)
+        else:
+            updated_since = lookback_floor
 
         # Resolve configured event-type slugs to IDs. Slugs that don't exist on this
         # ER site (404) are reported as missing rather than aborting the run.

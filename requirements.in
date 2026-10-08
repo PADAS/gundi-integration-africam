@@ -1,3 +1,2 @@
 # Add your integration-specific dependencies here
 earthranger-client==1.15.0
-httpx<0.28.0

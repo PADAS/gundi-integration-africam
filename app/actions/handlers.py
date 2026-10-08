@@ -44,10 +44,17 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
         # Never look back further than lookback_hours, even if the saved
         # last_execution is stale (e.g. after a long outage or misconfiguration).
         lookback_floor = now - timedelta(hours=action_config.lookback_hours)
+        last_execution_dt = None
         if last_execution := state.get("last_execution"):
-            updated_since = max(datetime.fromisoformat(last_execution), lookback_floor)
-        else:
+            last_execution_dt = datetime.fromisoformat(last_execution)
+            if last_execution_dt.tzinfo is None:
+                # Hand-seeded or migrated state may lack a zone; we always write UTC.
+                last_execution_dt = last_execution_dt.replace(tzinfo=timezone.utc)
+        cap_engaged = last_execution_dt is not None and last_execution_dt < lookback_floor
+        if last_execution_dt is None or cap_engaged:
             updated_since = lookback_floor
+        else:
+            updated_since = last_execution_dt
 
         # Resolve configured event-type slugs to IDs. Slugs that don't exist on this
         # ER site (404) are reported as missing rather than aborting the run.
@@ -80,8 +87,8 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
         if action_config.event_types and not resolved_ids:
             # None of the configured event types exist on this site; skip fetching
             # entirely so we don't pull every event. Persist state (to keep the throttle
-            # timestamp) but leave last_execution unchanged so the window is retried
-            # once the configuration is corrected.
+            # timestamp) but leave last_execution unchanged so the window (up to
+            # lookback_hours) is retried once the configuration is corrected.
             logger.warning(
                 f"No configured event types resolved on {er_base_url}; skipping fetch"
             )
@@ -92,6 +99,27 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
                 state=state,
             )
             continue
+
+        if cap_engaged:
+            # Events updated between last_execution and the floor are skipped for good.
+            # Surface that so an operator can backfill by touching events if needed.
+            # This fires once per gap: the run below writes a fresh last_execution.
+            await log_action_activity(
+                integration_id=integration_id,
+                action_id="process_new_events",
+                title=(
+                    f"Fetch window on {er_base_url} capped at {action_config.lookback_hours}h; "
+                    f"events updated between {last_execution_dt.isoformat()} and "
+                    f"{lookback_floor.isoformat()} were skipped"
+                ),
+                level=LogLevel.WARNING,
+                data={
+                    "er_base_url": er_base_url,
+                    "last_execution": last_execution,
+                    "capped_to": lookback_floor.isoformat(),
+                    "lookback_hours": action_config.lookback_hours,
+                },
+            )
 
         await log_action_activity(
             integration_id=integration_id,

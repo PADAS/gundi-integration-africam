@@ -60,7 +60,7 @@ async def test_resolve_event_type_ids_resolves_slugs(mock_er_client):
         )
 
     mock_er_client.get_event_type.assert_called_once_with("wildlife_sighting", version="v2.0")
-    assert resolved == [WILDLIFE_SIGHTING_ID]
+    assert resolved == {"wildlife_sighting": WILDLIFE_SIGHTING_ID}
     assert missing == []
 
 
@@ -78,7 +78,10 @@ async def test_resolve_event_type_ids_resolves_multiple_slugs(mock_er_client):
             ER_API_URL, ER_TOKEN, ["wildlife_sighting", "elephant_sighting"]
         )
 
-    assert resolved == [WILDLIFE_SIGHTING_ID, ELEPHANT_SIGHTING_ID]
+    assert resolved == {
+        "wildlife_sighting": WILDLIFE_SIGHTING_ID,
+        "elephant_sighting": ELEPHANT_SIGHTING_ID,
+    }
     assert missing == []
 
 
@@ -97,7 +100,7 @@ async def test_resolve_event_type_ids_skips_missing_slug(mock_er_client):
             ER_API_URL, ER_TOKEN, ["wildlife_sighting", "transgressions_africam"]
         )
 
-    assert resolved == [WILDLIFE_SIGHTING_ID]
+    assert resolved == {"wildlife_sighting": WILDLIFE_SIGHTING_ID}
     assert missing == ["transgressions_africam"]
 
 
@@ -110,7 +113,7 @@ async def test_resolve_event_type_ids_all_missing(mock_er_client):
             ER_API_URL, ER_TOKEN, ["transgressions_africam"]
         )
 
-    assert resolved == []
+    assert resolved == {}
     assert missing == ["transgressions_africam"]
 
 

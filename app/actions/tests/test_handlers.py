@@ -40,6 +40,7 @@ def africam_config():
 
 
 WILDLIFE_SIGHTING_ID = "uuid-wildlife-sighting"
+AFRICAM_WILDLIFE_ID = "uuid-africam-wildlife"
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ def mock_resolve_event_types(mocker):
     """By default all configured event types resolve cleanly with none missing."""
     return mocker.patch(
         "app.actions.handlers.resolve_event_type_ids",
-        new=AsyncMock(return_value=([WILDLIFE_SIGHTING_ID], [])),
+        new=AsyncMock(return_value=({"wildlife_sighting": WILDLIFE_SIGHTING_ID}, [])),
     )
 
 
@@ -299,7 +300,7 @@ async def test_pull_events_warns_when_lookback_cap_engages(
 
     warnings = _cap_warnings(mock_log)
     assert len(warnings) == 1
-    assert warnings[0].kwargs["data"]["last_execution"] == stale_run
+    assert warnings[0].kwargs["data"]["capped_event_types"] == {"wildlife_sighting": stale_run}
     assert warnings[0].kwargs["data"]["er_base_url"] == ER_API_URL
 
 
@@ -323,7 +324,7 @@ async def test_pull_events_no_cap_warning_when_no_event_types_resolve(
 ):
     """A destination stuck in the no-types-resolved branch keeps its stale
     last_execution forever; it must not emit the cap warning every minute."""
-    mock_resolve_event_types.return_value = ([], ["transgressions_africam"])
+    mock_resolve_event_types.return_value = ({}, ["transgressions_africam"])
     mock_state_manager.get_state = AsyncMock(return_value={"last_execution": "2024-06-01T12:00:00+00:00"})
     mock_get_events, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
 
@@ -346,6 +347,147 @@ async def test_pull_events_accepts_naive_last_execution(
 
     updated_since = mock_get_events.call_args.kwargs["updated_since"]
     assert updated_since.tzinfo is not None
+
+
+# ---------------------------------------------------------------------------
+# Per-event-type watermarks
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def two_type_config():
+    return AfricamActionConfiguration(
+        africam_api_url=AFRICAM_API_URL,
+        africam_token=AFRICAM_TOKEN,
+        event_types=["wildlife_sighting", "africam_wildlife"],
+        lookback_hours=1,
+    )
+
+
+@pytest.fixture
+def mock_resolve_two_types(mock_resolve_event_types):
+    mock_resolve_event_types.return_value = (
+        {"wildlife_sighting": WILDLIFE_SIGHTING_ID, "africam_wildlife": AFRICAM_WILDLIFE_ID},
+        [],
+    )
+    return mock_resolve_event_types
+
+
+def _fetches(mock_get_events):
+    """(event_type_ids, updated_since) for each get_events call, in order."""
+    return [
+        (c.kwargs["event_type_ids"], c.kwargs["updated_since"])
+        for c in mock_get_events.call_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pull_events_fetches_each_type_from_its_own_watermark(
+    mocker, mock_integration, two_type_config, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    """A type that was missing for a while (no watermark, or an older one) must be
+    fetched from its own window, not from the newest type's watermark."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution": recent,
+        "last_execution_by_type": {"wildlife_sighting": recent},
+    })
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    before = datetime.now(timezone.utc)
+    await action_process_new_events(integration=mock_integration, action_config=two_type_config)
+    after = datetime.now(timezone.utc)
+
+    fetches = _fetches(mock_get_events)
+    assert len(fetches) == 2
+    assert ([WILDLIFE_SIGHTING_ID], datetime.fromisoformat(recent)) in fetches
+    (africam_ids, africam_since), = [f for f in fetches if f[0] == [AFRICAM_WILDLIFE_ID]]
+    lookback = timedelta(hours=two_type_config.lookback_hours)
+    assert before - lookback <= africam_since <= after - lookback
+
+
+@pytest.mark.asyncio
+async def test_pull_events_groups_types_that_share_a_watermark(
+    mocker, mock_integration, two_type_config, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    """Steady state: both types were fetched in the same run, so one ER call covers both."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution_by_type": {"wildlife_sighting": recent, "africam_wildlife": recent},
+    })
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=two_type_config)
+
+    assert _fetches(mock_get_events) == [
+        ([WILDLIFE_SIGHTING_ID, AFRICAM_WILDLIFE_ID], datetime.fromisoformat(recent))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pull_events_advances_only_resolved_type_watermarks(
+    mocker, mock_integration, two_type_config, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_event_types
+):
+    """A missing type keeps its old watermark so its events are picked up once the
+    slug resolves again; the resolved type's watermark moves to now."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_resolve_event_types.return_value = (
+        {"wildlife_sighting": WILDLIFE_SIGHTING_ID}, ["africam_wildlife"]
+    )
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution_by_type": {"wildlife_sighting": recent, "africam_wildlife": recent},
+    })
+    _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=two_type_config)
+
+    saved = mock_state_manager.set_state.call_args.kwargs["state"]["last_execution_by_type"]
+    assert saved["africam_wildlife"] == recent
+    assert datetime.fromisoformat(saved["wildlife_sighting"]) > datetime.fromisoformat(recent)
+
+
+@pytest.mark.asyncio
+async def test_pull_events_seeds_type_watermarks_from_legacy_last_execution(
+    mocker, mock_integration, two_type_config, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    """First run after upgrading from the single-watermark state: every resolved
+    type starts from the old last_execution, not from a full lookback window."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution": recent})
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=two_type_config)
+
+    assert _fetches(mock_get_events) == [
+        ([WILDLIFE_SIGHTING_ID, AFRICAM_WILDLIFE_ID], datetime.fromisoformat(recent))
+    ]
+    saved = mock_state_manager.set_state.call_args.kwargs["state"]
+    assert set(saved["last_execution_by_type"]) == {"wildlife_sighting", "africam_wildlife"}
+    assert "last_execution" in saved
+
+
+@pytest.mark.asyncio
+async def test_pull_events_cap_warning_names_only_the_capped_types(
+    mocker, mock_integration, two_type_config, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stale = "2024-06-01T12:00:00+00:00"
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution_by_type": {"wildlife_sighting": recent, "africam_wildlife": stale},
+    })
+    _, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=two_type_config)
+
+    warnings = _cap_warnings(mock_log)
+    assert len(warnings) == 1
+    assert warnings[0].kwargs["data"]["capped_event_types"] == {"africam_wildlife": stale}
+    assert "africam_wildlife" in warnings[0].kwargs["title"]
+    assert "wildlife_sighting" not in warnings[0].kwargs["title"]
 
 
 @pytest.mark.asyncio
@@ -409,7 +551,9 @@ async def test_pull_events_saves_state_after_run(
     assert call_kwargs["integration_id"] == INTEGRATION_ID
     assert call_kwargs["action_id"] == "process_new_events"
     assert call_kwargs["source_id"] == ER_API_URL
-    assert "last_execution" in call_kwargs["state"]
+    saved = call_kwargs["state"]
+    assert set(saved["last_execution_by_type"]) == {"wildlife_sighting"}
+    assert saved["last_execution_by_type"]["wildlife_sighting"] == saved["last_execution"]
 
 
 @pytest.mark.asyncio
@@ -469,7 +613,7 @@ async def test_pull_events_warns_on_missing_event_type_and_continues(
 ):
     """A configured event type missing on the ER site is logged as a WARNING (not an
     error), and the event types that do resolve are still processed."""
-    mock_resolve_event_types.return_value = ([WILDLIFE_SIGHTING_ID], ["transgressions_africam"])
+    mock_resolve_event_types.return_value = ({"wildlife_sighting": WILDLIFE_SIGHTING_ID}, ["transgressions_africam"])
     mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
     mock_get_events = mocker.patch(
         "app.actions.handlers.get_events", new=AsyncMock(return_value=er_events)
@@ -503,7 +647,7 @@ async def test_pull_events_throttles_missing_event_type_warning(
     last hour, but the resolved types are still processed."""
     recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     mock_state_manager.get_state = AsyncMock(return_value={"last_missing_warning": recent})
-    mock_resolve_event_types.return_value = ([WILDLIFE_SIGHTING_ID], ["transgressions_africam"])
+    mock_resolve_event_types.return_value = ({"wildlife_sighting": WILDLIFE_SIGHTING_ID}, ["transgressions_africam"])
     mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
     mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=er_events))
     mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
@@ -531,7 +675,7 @@ async def test_pull_events_warns_again_after_throttle_interval(
     and the new timestamp is persisted to state."""
     stale = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     mock_state_manager.get_state = AsyncMock(return_value={"last_missing_warning": stale})
-    mock_resolve_event_types.return_value = ([WILDLIFE_SIGHTING_ID], ["transgressions_africam"])
+    mock_resolve_event_types.return_value = ({"wildlife_sighting": WILDLIFE_SIGHTING_ID}, ["transgressions_africam"])
     mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
     mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=er_events))
     mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock(return_value=africam_response))
@@ -559,7 +703,7 @@ async def test_pull_events_skips_destination_when_no_event_types_resolve(
 ):
     """When none of the configured event types exist on the ER site, the fetch is
     skipped entirely (so we don't pull every event), with a WARNING logged."""
-    mock_resolve_event_types.return_value = ([], ["transgressions_africam"])
+    mock_resolve_event_types.return_value = ({}, ["transgressions_africam"])
     mocker.patch("app.actions.handlers.state_manager", mock_state_manager)
     mock_get_events = mocker.patch("app.actions.handlers.get_events", new=AsyncMock(return_value=[]))
     mock_post = mocker.patch("app.actions.handlers.post_event_to_africam", new=AsyncMock())

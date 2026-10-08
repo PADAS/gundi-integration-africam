@@ -36,7 +36,7 @@ async def post_event(api_url: str, token: str, event_data: dict) -> dict:
 
     response = None
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        for attempt in stamina.retry_context(
+        async for attempt in stamina.retry_context(
             on=httpx.HTTPError, wait_initial=5.0, wait_jitter=5.0, wait_max=60.0
         ):
             with attempt:

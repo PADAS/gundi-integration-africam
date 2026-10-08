@@ -41,24 +41,13 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
             integration_id, "process_new_events", source_id=er_base_url
         )
         now = datetime.now(timezone.utc)
-        # Never look back further than lookback_hours, even if the saved
-        # last_execution is stale (e.g. after a long outage or misconfiguration).
+        # Never look back further than lookback_hours, even if a saved watermark
+        # is stale (e.g. after a long outage or misconfiguration).
         lookback_floor = now - timedelta(hours=action_config.lookback_hours)
-        last_execution_dt = None
-        if last_execution := state.get("last_execution"):
-            last_execution_dt = datetime.fromisoformat(last_execution)
-            if last_execution_dt.tzinfo is None:
-                # Hand-seeded or migrated state may lack a zone; we always write UTC.
-                last_execution_dt = last_execution_dt.replace(tzinfo=timezone.utc)
-        cap_engaged = last_execution_dt is not None and last_execution_dt < lookback_floor
-        if last_execution_dt is None or cap_engaged:
-            updated_since = lookback_floor
-        else:
-            updated_since = last_execution_dt
 
         # Resolve configured event-type slugs to IDs. Slugs that don't exist on this
         # ER site (404) are reported as missing rather than aborting the run.
-        resolved_ids, missing_slugs = await resolve_event_type_ids(
+        resolved, missing_slugs = await resolve_event_type_ids(
             api_url=er_base_url,
             token=er_token,
             slugs=action_config.event_types,
@@ -84,10 +73,10 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
                 # Record when we warned so we throttle repeat warnings for this destination.
                 state = {**state, "last_missing_warning": now.isoformat()}
 
-        if action_config.event_types and not resolved_ids:
+        if action_config.event_types and not resolved:
             # None of the configured event types exist on this site; skip fetching
             # entirely so we don't pull every event. Persist state (to keep the throttle
-            # timestamp) but leave last_execution unchanged so the window (up to
+            # timestamp) but leave the watermarks unchanged so the window (up to
             # lookback_hours) is retried once the configuration is corrected.
             logger.warning(
                 f"No configured event types resolved on {er_base_url}; skipping fetch"
@@ -100,45 +89,74 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
             )
             continue
 
-        if cap_engaged:
-            # Events updated between last_execution and the floor are skipped for good.
-            # Surface that so an operator can backfill by touching events if needed.
-            # This fires once per gap: the run below writes a fresh last_execution.
+        # Each event type carries its own watermark, so a type that was missing
+        # (or newly configured) is fetched from where *it* left off rather than from
+        # the newest type's watermark. State written before this existed holds a
+        # single last_execution; seed every resolved type from it once so the upgrade
+        # doesn't re-fetch a full lookback window.
+        watermarks = state.get("last_execution_by_type")
+        if watermarks is None:
+            legacy = state.get("last_execution")
+            watermarks = {slug: legacy for slug in resolved} if legacy else {}
+
+        windows = {}  # updated_since -> [slug, ...]; types sharing a watermark share a fetch
+        capped = {}   # slug -> stale watermark, for the operator warning
+        for slug in resolved:
+            watermark_dt = None
+            if watermark := watermarks.get(slug):
+                watermark_dt = datetime.fromisoformat(watermark)
+                if watermark_dt.tzinfo is None:
+                    # Hand-seeded or migrated state may lack a zone; we always write UTC.
+                    watermark_dt = watermark_dt.replace(tzinfo=timezone.utc)
+            if watermark_dt is not None and watermark_dt < lookback_floor:
+                capped[slug] = watermark
+                watermark_dt = None
+            updated_since = watermark_dt or lookback_floor
+            windows.setdefault(updated_since, []).append(slug)
+
+        if capped:
+            # Events updated between the stale watermark and the floor are skipped for
+            # good. Surface that so an operator can backfill by touching events if needed.
+            # This fires once per gap: the run below writes fresh watermarks.
             await log_action_activity(
                 integration_id=integration_id,
                 action_id="process_new_events",
                 title=(
-                    f"Fetch window on {er_base_url} capped at {action_config.lookback_hours}h; "
-                    f"events updated between {last_execution_dt.isoformat()} and "
+                    f"Fetch window on {er_base_url} capped at {action_config.lookback_hours}h "
+                    f"for {', '.join(capped)}; events updated before "
                     f"{lookback_floor.isoformat()} were skipped"
                 ),
                 level=LogLevel.WARNING,
                 data={
                     "er_base_url": er_base_url,
-                    "last_execution": last_execution,
+                    "capped_event_types": capped,
                     "capped_to": lookback_floor.isoformat(),
                     "lookback_hours": action_config.lookback_hours,
                 },
             )
 
-        await log_action_activity(
-            integration_id=integration_id,
-            action_id="process_new_events",
-            title=f"Fetching EarthRanger events from {er_base_url} updated since {updated_since.isoformat()}",
-            level=LogLevel.INFO,
-            data={
-                "er_base_url": er_base_url,
-                "updated_since": updated_since.isoformat(),
-                "event_types": action_config.event_types,
-            },
-        )
-
-        events = await get_events(
-            api_url=er_base_url,
-            token=er_token,
-            updated_since=updated_since,
-            event_type_ids=resolved_ids,
-        )
+        events = []
+        for updated_since, slugs in windows.items():
+            await log_action_activity(
+                integration_id=integration_id,
+                action_id="process_new_events",
+                title=(
+                    f"Fetching EarthRanger events from {er_base_url} updated since "
+                    f"{updated_since.isoformat()} for {', '.join(slugs)}"
+                ),
+                level=LogLevel.INFO,
+                data={
+                    "er_base_url": er_base_url,
+                    "updated_since": updated_since.isoformat(),
+                    "event_types": slugs,
+                },
+            )
+            events += await get_events(
+                api_url=er_base_url,
+                token=er_token,
+                updated_since=updated_since,
+                event_type_ids=[resolved[slug] for slug in slugs],
+            )
         logger.info(
             f"Fetched {len(events)} event(s) from {er_base_url} for integration {integration_id}"
         )
@@ -197,13 +215,22 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
                 logger.exception(f"Error processing ER event {er_event_id}: {e}")
                 errors += 1
 
-        # Persist the fetch timestamp so the next run is incremental for this destination.
-        # Merge onto existing state so the missing-event-type warning throttle survives.
+        # Advance the watermark of every type we just fetched; a missing type keeps
+        # its old one. Merge onto existing state so the missing-event-type warning
+        # throttle survives. last_execution is still written so a rollback to the
+        # single-watermark release keeps working.
         await state_manager.set_state(
             integration_id=integration_id,
             action_id="process_new_events",
             source_id=er_base_url,
-            state={**state, "last_execution": now.isoformat()},
+            state={
+                **state,
+                "last_execution": now.isoformat(),
+                "last_execution_by_type": {
+                    **watermarks,
+                    **{slug: now.isoformat() for slug in resolved},
+                },
+            },
         )
 
         total_fetched += len(events)

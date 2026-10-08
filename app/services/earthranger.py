@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from erclient import AsyncERClient, ERClientNotFound
 
@@ -13,16 +13,17 @@ def _make_client(api_url: str, token: str) -> AsyncERClient:
 
 async def resolve_event_type_ids(
     api_url: str, token: str, slugs: List[str]
-) -> Tuple[List[str], List[str]]:
+) -> Tuple[Dict[str, str], List[str]]:
     """Resolve event-type natural keys (e.g. 'wildlife_sighting') to their UUIDs.
 
     The EarthRanger API requires event-type IDs, not slugs, when filtering events.
     A slug that doesn't exist on the ER site returns a 404; rather than aborting,
     it is collected into the returned ``missing`` list so the caller can report it.
 
-    Returns a ``(resolved_ids, missing_slugs)`` tuple.
+    Returns a ``(resolved, missing_slugs)`` tuple, where ``resolved`` maps each
+    found slug to its UUID in the order the slugs were given.
     """
-    resolved: List[str] = []
+    resolved: Dict[str, str] = {}
     missing: List[str] = []
     async with _make_client(api_url, token) as client:
         for slug in slugs:
@@ -32,7 +33,7 @@ async def resolve_event_type_ids(
                 logger.warning(f"Event type '{slug}' not found on {api_url}; skipping")
                 missing.append(slug)
                 continue
-            resolved.append(event_type["id"])
+            resolved[slug] = event_type["id"]
     return resolved, missing
 
 

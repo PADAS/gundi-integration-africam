@@ -35,18 +35,25 @@ Every EarthRanger destination on the connection is processed on every run.
 
 ## The incremental fetch window
 
-Each EarthRanger destination keeps its own `last_execution` timestamp in the
-runner's Redis state (keyed by the destination's base URL):
+Each EarthRanger destination keeps one watermark **per configured event
+type** in the runner's Redis state (keyed by the destination's base URL):
 
-- **First run** (no state yet): fetch events updated in the last
+- **First run for a type** (no watermark yet, including a slug you just added
+  to **Event Types**): fetch that type's events updated in the last
   `lookback_hours`.
-- **Every later run**: fetch events updated since the previous run started,
-  but never further back than `lookback_hours`. A stale `last_execution`
-  (for example after a long outage or a misconfigured event type) is capped
-  rather than triggering an unbounded backfill. When that happens the run logs
-  a one-off **WARNING** naming the skipped range, so you can backfill by
-  editing the affected events (see
+- **Every later run**: fetch each type's events updated since the last run
+  that fetched that type, but never further back than `lookback_hours`. A
+  stale watermark (for example after a long outage) is capped rather than
+  triggering an unbounded backfill. When that happens the run logs a one-off
+  **WARNING** naming the capped types and the skipped range, so you can
+  backfill by editing the affected events (see
   [Troubleshooting](troubleshooting.md#an-event-never-got-its-gallery-url)).
+- **A type that stops resolving** (renamed or disabled in EarthRanger) keeps
+  its watermark while the other types carry on. Once the slug resolves again
+  its backlog is picked up from where it left off, up to `lookback_hours`.
+
+Types whose watermarks are equal are fetched in a single EarthRanger call, so
+in the steady state this still costs one request per destination per minute.
 
 Because the filter is *updated since*, edits to older events re-fetch them —
 and the already-processed check (below) keeps them from being re-forwarded.

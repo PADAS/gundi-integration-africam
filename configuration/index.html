@@ -529,19 +529,25 @@ its auth config, the whole run fails — see
 <a href="../troubleshooting/#the-run-fails-before-fetching-anything">Troubleshooting</a>.</p>
 </blockquote>
 <h2 id="the-incremental-fetch-window">The incremental fetch window<a class="headerlink" href="#the-incremental-fetch-window" title="Permanent link">&para;</a></h2>
-<p>Each EarthRanger destination keeps its own <code>last_execution</code> timestamp in the
-runner's Redis state (keyed by the destination's base URL):</p>
+<p>Each EarthRanger destination keeps one watermark <strong>per configured event
+type</strong> in the runner's Redis state (keyed by the destination's base URL):</p>
 <ul>
-<li><strong>First run</strong> (no state yet): fetch events updated in the last
+<li><strong>First run for a type</strong> (no watermark yet, including a slug you just added
+  to <strong>Event Types</strong>): fetch that type's events updated in the last
   <code>lookback_hours</code>.</li>
-<li><strong>Every later run</strong>: fetch events updated since the previous run started,
-  but never further back than <code>lookback_hours</code>. A stale <code>last_execution</code>
-  (for example after a long outage or a misconfigured event type) is capped
-  rather than triggering an unbounded backfill. When that happens the run logs
-  a one-off <strong>WARNING</strong> naming the skipped range, so you can backfill by
-  editing the affected events (see
+<li><strong>Every later run</strong>: fetch each type's events updated since the last run
+  that fetched that type, but never further back than <code>lookback_hours</code>. A
+  stale watermark (for example after a long outage) is capped rather than
+  triggering an unbounded backfill. When that happens the run logs a one-off
+  <strong>WARNING</strong> naming the capped types and the skipped range, so you can
+  backfill by editing the affected events (see
   <a href="../troubleshooting/#an-event-never-got-its-gallery-url">Troubleshooting</a>).</li>
+<li><strong>A type that stops resolving</strong> (renamed or disabled in EarthRanger) keeps
+  its watermark while the other types carry on. Once the slug resolves again
+  its backlog is picked up from where it left off, up to <code>lookback_hours</code>.</li>
 </ul>
+<p>Types whose watermarks are equal are fetched in a single EarthRanger call, so
+in the steady state this still costs one request per destination per minute.</p>
 <p>Because the filter is <em>updated since</em>, edits to older events re-fetch them —
 and the already-processed check (below) keeps them from being re-forwarded.</p>
 <h2 id="what-gets-forwarded-exactly">What gets forwarded, exactly<a class="headerlink" href="#what-gets-forwarded-exactly" title="Permanent link">&para;</a></h2>

@@ -459,8 +459,8 @@ and this runner processes every EarthRanger destination on that connection.</p>
 <p>Every minute (crontab <code>* * * * *</code>), for each EarthRanger site on the
 connection, the <code>process_new_events</code> action:</p>
 <ol>
-<li>Fetches events <strong>updated since the last run</strong> (first run looks back
-   <code>lookback_hours</code>).</li>
+<li>Fetches events <strong>updated since the last run</strong>, never reaching further
+   back than <code>lookback_hours</code> (which is also the first run's window).</li>
 <li>Keeps only the configured <strong>event types</strong> (e.g. <code>wildlife_sighting</code>) and
    skips events that already carry an <code>africam_event_url</code> (already
    processed — the action is idempotent).</li>

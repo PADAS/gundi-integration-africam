@@ -508,7 +508,7 @@ a <code>* * * * *</code> crontab — once a minute, automatically.</p>
 <td><strong>Lookback Hours</strong></td>
 <td>—</td>
 <td><code>1</code> (1–168)</td>
-<td>How far back the <strong>first</strong> run fetches. Ignored once the action has run, because the window then continues from the previous run.</td>
+<td>How far back the <strong>first</strong> run fetches, and the <strong>maximum</strong> any later run reaches back. The window normally continues from the previous run, but never further back than this.</td>
 </tr>
 <tr>
 <td><strong>Africam Event URL Template</strong></td>
@@ -534,7 +534,13 @@ runner's Redis state (keyed by the destination's base URL):</p>
 <ul>
 <li><strong>First run</strong> (no state yet): fetch events updated in the last
   <code>lookback_hours</code>.</li>
-<li><strong>Every later run</strong>: fetch events updated since the previous run started.</li>
+<li><strong>Every later run</strong>: fetch events updated since the previous run started,
+  but never further back than <code>lookback_hours</code>. A stale <code>last_execution</code>
+  (for example after a long outage or a misconfigured event type) is capped
+  rather than triggering an unbounded backfill. When that happens the run logs
+  a one-off <strong>WARNING</strong> naming the skipped range, so you can backfill by
+  editing the affected events (see
+  <a href="../troubleshooting/#an-event-never-got-its-gallery-url">Troubleshooting</a>).</li>
 </ul>
 <p>Because the filter is <em>updated since</em>, edits to older events re-fetch them —
 and the already-processed check (below) keeps them from being re-forwarded.</p>
@@ -543,20 +549,20 @@ and the already-processed check (below) keeps them from being re-forwarded.</p>
 <strong>Event Types</strong> and which do <strong>not</strong> already have <code>africam_event_url</code> in
 their details, then POSTs to <code>POST {africam_api_url}/events/webhook</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;event_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;event_update&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;er-event-id&gt;&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;event_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;wildlife_sighting&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;location&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;latitude&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">-1.4061</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;longitude&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">35.1425</span><span class="p">},</span>
-<span class="w">    </span><span class="nt">&quot;event_details&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;species&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;white rhino&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
+<span class="w">  </span><span class="nt">"event_type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"event_update"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;er-event-id&gt;"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"event_type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"wildlife_sighting"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"location"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"latitude"</span><span class="p">:</span><span class="w"> </span><span class="mf">-1.4061</span><span class="p">,</span><span class="w"> </span><span class="nt">"longitude"</span><span class="p">:</span><span class="w"> </span><span class="mf">35.1425</span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"event_details"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"species"</span><span class="p">:</span><span class="w"> </span><span class="s2">"white rhino"</span><span class="p">,</span><span class="w"> </span><span class="nt">"count"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Africam replies with <code>{"status": "updated", "eventId": "&lt;uuid&gt;"}</code>. The
 runner formats <strong>Africam Event URL Template</strong> with that <code>eventId</code> and
 patches the EarthRanger event's details:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;event_details&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;...existing details...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;africam_event_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://ranger-media.africam.com/gallery/&lt;uuid&gt;&quot;</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"event_details"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"...existing details..."</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"africam_event_url"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://ranger-media.africam.com/gallery/&lt;uuid&gt;"</span><span class="p">}}</span>
 </code></pre></div>
 <blockquote>
 <p>A sanitized <a href="https://github.com/PADAS/gundi-integration-africam/blob/main/docs/Africam%20-%20EarthRanger%20Webhook.postman_collection.json">Postman collection</a>

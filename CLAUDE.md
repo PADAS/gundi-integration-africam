@@ -65,7 +65,7 @@ Runs on a `* * * * *` crontab (every minute). For each execution:
 |-------|---------|-------|
 | `africam_api_url` | `https://ranger-media.africam.com` | Africam base URL |
 | `africam_token` | required | Bearer token; rendered as password widget |
-| `event_types` | `["wildlife_sighting"]` | ER event-type slugs to forward |
+| `event_types` | `["wildlife_sighting"]` | ER event-type slugs to forward. Each item is annotated with `gundi:reference` (`list_event_types`, `target: "destination"`), so the portal offers the destination ER site's event types as a dropdown once a destination is attached; free text stays allowed |
 | `lookback_hours` | `1` | Initial fetch window and hard cap on every run's window (1–168 h); range widget |
 | `africam_event_url_template` | `https://ranger-media.africam.com/gallery/{africam_event_id}` | Must be `https://` and contain `{africam_event_id}`; validated via `regex` (emits `pattern` in JSON schema for browser validation) and a `@validator` that checks format-string correctness |
 

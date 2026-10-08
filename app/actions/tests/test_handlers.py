@@ -804,3 +804,29 @@ def test_url_template_pattern_in_schema():
     pattern = schema["properties"]["africam_event_url_template"]["pattern"]
     assert "africam_event_id" in pattern
     assert pattern.startswith("^https://")
+
+
+# ---------------------------------------------------------------------------
+# Reference-data annotation on event_types
+# ---------------------------------------------------------------------------
+
+def test_event_types_items_reference_destination_list_event_types():
+    """The portal renders each event_types item as a dropdown fed by the
+    EarthRanger destination's list_event_types reference action."""
+    ui_schema = AfricamActionConfiguration.ui_schema()
+
+    assert ui_schema["event_types"]["items"]["gundi:reference"] == {
+        "action": "list_event_types",
+        "target": "destination",
+        "params": {},
+        "allow_free_text": True,
+    }
+    # No ui:widget: portals without reference support keep a plain text input.
+    assert "ui:widget" not in ui_schema["event_types"]["items"]
+
+
+def test_ui_schema_keeps_field_widgets_and_order_alongside_the_annotation():
+    ui_schema = AfricamActionConfiguration.ui_schema()
+
+    assert ui_schema["africam_token"]["ui:widget"] == "password"
+    assert ui_schema["ui:order"][0] == "africam_api_url"

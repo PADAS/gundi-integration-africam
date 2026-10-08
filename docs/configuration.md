@@ -18,7 +18,7 @@ a `* * * * *` crontab — once a minute, automatically.
 |---|---|---|---|
 | **Africam API URL** | — | `https://ranger-media.africam.com` | Base URL of the Africam API. Events are POSTed to `{url}/events/webhook`. |
 | **Africam API Token** | yes | — | Bearer token for Africam. Stored as a secret (password field). |
-| **Event Types** | — | `["wildlife_sighting"]` | EarthRanger event-type slugs to forward. Anything not in this list is ignored. |
+| **Event Types** | — | `["wildlife_sighting"]` | EarthRanger event-type slugs to forward. Anything not in this list is ignored. Once an EarthRanger destination is attached to the route, each item offers that site's event types as a dropdown (the destination's `list_event_types` reference action); you can still type a slug by hand. |
 | **Lookback Hours** | — | `1` (1–168) | How far back the **first** run fetches, and the **maximum** any later run reaches back. The window normally continues from the previous run, but never further back than this. |
 | **Africam Event URL Template** | — | `https://ranger-media.africam.com/gallery/{africam_event_id}` | Format string for the gallery URL written back to EarthRanger. Must start with `https://` and contain `{africam_event_id}` — both are validated when you save. |
 

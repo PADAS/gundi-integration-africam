@@ -1,10 +1,28 @@
 import string
 import pydantic
-from typing import List
+from typing import List, Optional
 from app.actions.core import PullActionConfiguration
 from app.services.utils import FieldWithUIOptions, UIOptions, GlobalUISchemaOptions
 
 _DEFAULT_URL_TEMPLATE = "https://ranger-media.africam.com/gallery/{africam_event_id}"
+
+
+def _reference(action: str, params: Optional[dict] = None, *, target: str = "self") -> dict:
+    """Build a gundi:reference ui_schema annotation (same helper as the
+    EarthRanger and cmore runners). Deliberately does NOT set ui:widget, so
+    portals without reference support keep rendering plain text fields.
+
+    ``target="destination"`` directs the portal to fetch from the destination
+    integration(s) of this provider's connection instead of from this
+    integration: the EarthRanger vocabulary this runner filters on is served
+    by the EarthRanger runner's own reference actions.
+    """
+    return {
+        "action": action,
+        "target": target,
+        "params": params or {},
+        "allow_free_text": True,
+    }
 
 
 class AfricamActionConfiguration(PullActionConfiguration):
@@ -55,6 +73,21 @@ class AfricamActionConfiguration(PullActionConfiguration):
             "africam_event_url_template",
         ]
     )
+
+    @classmethod
+    def ui_schema(cls, *args, **kwargs):
+        """Annotate event_types so the portal renders each item as a live
+        dropdown of the EarthRanger destination's event types (its
+        ``list_event_types`` reference action). The runner reads the ER site
+        from the connection's destination at run time, so the dropdown offers
+        exactly the slugs the pull can resolve. Free text stays allowed, and
+        the list only populates once a destination is attached to the route.
+        The annotation sits on the array's ``items`` node so rjsf applies it
+        to every element.
+        """
+        base = super().ui_schema(*args, **kwargs)
+        base["event_types"] = {"items": {"gundi:reference": _reference("list_event_types", target="destination")}}
+        return base
 
     @pydantic.validator("africam_event_url_template")
     def validate_url_template(cls, v):

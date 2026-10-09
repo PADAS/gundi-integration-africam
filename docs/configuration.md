@@ -21,6 +21,8 @@ a `* * * * *` crontab — once a minute, automatically.
 | **Event Types** | — | `["wildlife_sighting"]` | EarthRanger event-type slugs to forward. Anything not in this list is ignored. Once an EarthRanger destination is attached to the route, each item offers that site's event types as a dropdown (the destination's `list_event_types` reference action); you can still type a slug by hand. |
 | **Lookback Hours** | — | `1` (1–168) | How far back the **first** run fetches, and the **maximum** any later run reaches back. The window normally continues from the previous run, but never further back than this. |
 | **Africam Event URL Template** | — | `https://ranger-media.africam.com/gallery/{africam_event_id}` | Format string for the gallery URL written back to EarthRanger. Must start with `https://` and contain `{africam_event_id}` — both are validated when you save. |
+| **Start Datetime** | — | empty | Only used while **Force Run From Start Datetime** is on. |
+| **Force Run From Start Datetime** | — | off | Resets the fetch window: while on, every run fetches all configured event types from **Start Datetime**, ignoring the saved watermarks and the Lookback Hours cap. Turn it off once the catch-up run has completed. |
 
 ## Where the EarthRanger credentials come from
 
@@ -98,3 +100,14 @@ site); if **none** of your slugs exist on a site, that site's fetch is
 skipped entirely — the runner never falls back to fetching *all* events.
 
 [← Overview](index.md) · [Troubleshooting](troubleshooting.md)
+
+## Re-fetching a time range (resetting the watermarks)
+
+The action remembers, per event type, when it last fetched, and each run continues from there. To make it re-read a range (for example after events were missed while a slug was misspelled, or after a stall):
+
+1. Set **Start Datetime** to the beginning of the range you want re-read.
+2. Turn **Force Run From Start Datetime** on and save.
+3. Wait for the next run (within a minute). The Activity Log shows a warning naming the forced start time, and the run fetches every configured type from it. Events that already carry an `africam_event_url` are skipped, so only events never forwarded are sent to Africam.
+4. Turn **Force Run From Start Datetime** off and save. The watermarks were advanced by the forced run, so normal incremental fetching resumes. While the toggle stays on, every run re-pulls from Start Datetime.
+
+The Lookback Hours cap does not apply to a forced run, so choose a Start Datetime that matches the range you actually need.

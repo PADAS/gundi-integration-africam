@@ -841,3 +841,125 @@ def test_ui_order_covers_every_schema_property():
 
     assert properties - set(order) == set()
     assert order[-1] == "run_on_schedule"
+
+
+# ---------------------------------------------------------------------------
+# Operator watermark reset: start_datetime + force_run_since_start
+# ---------------------------------------------------------------------------
+
+START = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def _forced_config(force=True, start=START, **overrides):
+    return AfricamActionConfiguration(
+        africam_api_url=AFRICAM_API_URL,
+        africam_token=AFRICAM_TOKEN,
+        event_types=["wildlife_sighting", "africam_wildlife"],
+        lookback_hours=1,
+        start_datetime=start,
+        force_run_since_start=force,
+        **overrides,
+    )
+
+
+def _force_warnings(mock_log):
+    return [
+        c for c in mock_log.call_args_list
+        if c.kwargs.get("level") == LogLevel.WARNING and "Force Run" in c.kwargs["title"]
+    ]
+
+
+def test_force_run_without_start_datetime_is_rejected():
+    with pytest.raises(pydantic.ValidationError, match="start_datetime"):
+        _forced_config(force=True, start=None)
+
+
+def test_force_run_fields_are_off_by_default_and_render_a_date_time_picker():
+    config = AfricamActionConfiguration(**BASE_CONFIG)
+    assert config.start_datetime is None
+    assert config.force_run_since_start is False
+
+    ui_schema = AfricamActionConfiguration.ui_schema()
+    assert ui_schema["start_datetime"]["ui:widget"] == "date-time"
+    order = ui_schema["ui:order"]
+    assert order.index("start_datetime") < order.index("force_run_since_start") < order.index("run_on_schedule")
+
+
+@pytest.mark.asyncio
+async def test_pull_events_force_run_fetches_every_type_from_start_datetime(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    """With the toggle on, saved watermarks are ignored: every resolved type is
+    fetched from start_datetime (one grouped call), the lookback cap does not
+    apply, and the watermarks then advance to the run's start time."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution": recent,
+        "last_execution_by_type": {"wildlife_sighting": recent, "africam_wildlife": recent},
+    })
+    mock_get_events, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    before = datetime.now(timezone.utc)
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config())
+    after = datetime.now(timezone.utc)
+
+    assert _fetches(mock_get_events) == [([WILDLIFE_SIGHTING_ID, AFRICAM_WILDLIFE_ID], START)]
+    assert _cap_warnings(mock_log) == []
+    saved = mock_state_manager.set_state.call_args.kwargs["state"]
+    for slug in ("wildlife_sighting", "africam_wildlife"):
+        assert before <= datetime.fromisoformat(saved["last_execution_by_type"][slug]) <= after
+
+
+@pytest.mark.asyncio
+async def test_pull_events_force_run_warns_operator_every_run(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    _, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config())
+
+    warnings = _force_warnings(mock_log)
+    assert len(warnings) == 1
+    assert warnings[0].kwargs["data"] == {"er_base_url": ER_API_URL, "start_datetime": START.isoformat()}
+
+
+@pytest.mark.asyncio
+async def test_pull_events_start_datetime_is_ignored_unless_forced(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    """start_datetime alone changes nothing: the saved watermark still wins."""
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution_by_type": {"wildlife_sighting": recent, "africam_wildlife": recent},
+    })
+    mock_get_events, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config(force=False))
+
+    assert _fetches(mock_get_events) == [([WILDLIFE_SIGHTING_ID, AFRICAM_WILDLIFE_ID], datetime.fromisoformat(recent))]
+    assert _force_warnings(mock_log) == []
+
+
+@pytest.mark.asyncio
+async def test_pull_events_force_run_accepts_naive_start_datetime_as_utc(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(
+        integration=mock_integration, action_config=_forced_config(start=datetime(2024, 6, 1, 12, 0))
+    )
+
+    assert mock_get_events.call_args.kwargs["updated_since"] == START
+
+
+def test_cleared_start_datetime_is_treated_as_unset():
+    """A cleared date-time picker can submit "" rather than omitting the field."""
+    config = _forced_config(force=False, start="")
+    assert config.start_datetime is None
+    with pytest.raises(pydantic.ValidationError, match="start_datetime"):
+        _forced_config(force=True, start="")

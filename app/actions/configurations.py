@@ -1,5 +1,6 @@
 import string
 import pydantic
+from datetime import datetime
 from typing import List, Optional
 from app.actions.core import PullActionConfiguration
 from app.services.utils import FieldWithUIOptions, UIOptions, GlobalUISchemaOptions
@@ -64,6 +65,25 @@ class AfricamActionConfiguration(PullActionConfiguration):
         ),
         ui_options=UIOptions(widget="text"),
     )
+    start_datetime: Optional[datetime] = FieldWithUIOptions(
+        None,
+        title="Start Datetime",
+        description=(
+            "ISO-8601 timestamp. Used only while 'Force Run From Start Datetime' is on: "
+            "every configured event type is then fetched from this moment instead of from "
+            "its saved watermark. Ignored otherwise."
+        ),
+        ui_options=UIOptions(widget="date-time"),
+    )
+    force_run_since_start: bool = FieldWithUIOptions(
+        False,
+        title="Force Run From Start Datetime",
+        description=(
+            "Resets the per-event-type watermarks so the next run starts at 'Start Datetime' "
+            "(the Lookback Hours cap does not apply). Turn it off again once the catch-up run "
+            "completes; while it stays on, every run re-pulls from 'Start Datetime'."
+        ),
+    )
     ui_global_options = GlobalUISchemaOptions(
         order=[
             "africam_api_url",
@@ -71,6 +91,8 @@ class AfricamActionConfiguration(PullActionConfiguration):
             "event_types",
             "lookback_hours",
             "africam_event_url_template",
+            "start_datetime",
+            "force_run_since_start",
             "run_on_schedule",
         ]
     )
@@ -89,6 +111,17 @@ class AfricamActionConfiguration(PullActionConfiguration):
         base = super().ui_schema(*args, **kwargs)
         base["event_types"] = {"items": {"gundi:reference": _reference("list_event_types", target="destination")}}
         return base
+
+    @pydantic.validator("start_datetime", pre=True)
+    def empty_start_datetime_is_none(cls, v):
+        # A cleared date-time picker submits "" rather than omitting the field.
+        return None if v == "" else v
+
+    @pydantic.root_validator(skip_on_failure=True)
+    def force_run_requires_start_datetime(cls, values):
+        if values.get("force_run_since_start") and values.get("start_datetime") is None:
+            raise ValueError("start_datetime is required when force_run_since_start is enabled")
+        return values
 
     @pydantic.validator("africam_event_url_template")
     def validate_url_template(cls, v):

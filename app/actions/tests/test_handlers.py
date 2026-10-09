@@ -912,17 +912,69 @@ async def test_pull_events_force_run_fetches_every_type_from_start_datetime(
 
 
 @pytest.mark.asyncio
-async def test_pull_events_force_run_warns_operator_every_run(
+async def test_pull_events_force_run_happens_once_per_toggle_on(
     mocker, mock_integration, africam_response, mock_state_manager,
     mock_get_er_credentials, mock_resolve_two_types
 ):
-    _, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
+    """The forced fetch is one-shot: the run that applies it warns the operator and
+    records the applied start in state; while the toggle stays on, later runs use
+    the (advanced) watermarks and stay quiet."""
+    mock_get_events, mock_log = _patch_pipeline(mocker, mock_state_manager, africam_response)
 
     await action_process_new_events(integration=mock_integration, action_config=_forced_config())
 
     warnings = _force_warnings(mock_log)
     assert len(warnings) == 1
     assert warnings[0].kwargs["data"] == {"er_base_url": ER_API_URL, "start_datetime": START.isoformat()}
+    saved = mock_state_manager.set_state.call_args.kwargs["state"]
+    assert saved["forced_run_applied"] == START.isoformat()
+
+    # Second run, toggle still on: watermarks win, no second warning.
+    mock_state_manager.get_state = AsyncMock(return_value=saved)
+    mock_get_events.reset_mock(); mock_log.reset_mock()
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config())
+
+    (ids, since), = _fetches(mock_get_events)
+    assert since == datetime.fromisoformat(saved["last_execution_by_type"]["wildlife_sighting"])
+    assert _force_warnings(mock_log) == []
+
+
+@pytest.mark.asyncio
+async def test_pull_events_changed_start_datetime_forces_again(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    mock_state_manager.get_state = AsyncMock(return_value={
+        "last_execution_by_type": {"wildlife_sighting": recent, "africam_wildlife": recent},
+        "forced_run_applied": START.isoformat(),
+    })
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+    later = START + timedelta(days=1)
+
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config(start=later))
+
+    assert _fetches(mock_get_events) == [([WILDLIFE_SIGHTING_ID, AFRICAM_WILDLIFE_ID], later)]
+    assert mock_state_manager.set_state.call_args.kwargs["state"]["forced_run_applied"] == later.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_pull_events_toggle_off_clears_the_applied_marker(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_two_types
+):
+    """Turning the toggle off re-arms it: the next toggle-on forces again."""
+    mock_state_manager.get_state = AsyncMock(return_value={"forced_run_applied": START.isoformat()})
+    _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config(force=False))
+
+    assert "forced_run_applied" not in mock_state_manager.set_state.call_args.kwargs["state"]
+
+
+def test_start_datetime_in_the_future_is_rejected():
+    with pytest.raises(pydantic.ValidationError, match="future"):
+        _forced_config(start=datetime.now(timezone.utc) + timedelta(days=1))
 
 
 @pytest.mark.asyncio
@@ -963,3 +1015,24 @@ def test_cleared_start_datetime_is_treated_as_unset():
     assert config.start_datetime is None
     with pytest.raises(pydantic.ValidationError, match="start_datetime"):
         _forced_config(force=True, start="")
+
+
+@pytest.mark.asyncio
+async def test_pull_events_force_run_with_a_missing_slug_forces_only_resolved_types(
+    mocker, mock_integration, africam_response, mock_state_manager,
+    mock_get_er_credentials, mock_resolve_event_types
+):
+    """A slug that doesn't resolve keeps its watermark through a forced run; the
+    marker is still recorded, so the operator re-arms the toggle once the slug
+    is fixed if that type needs the backfill too."""
+    mock_resolve_event_types.return_value = ({"wildlife_sighting": WILDLIFE_SIGHTING_ID}, ["africam_wildlife"])
+    old = "2024-01-01T00:00:00+00:00"
+    mock_state_manager.get_state = AsyncMock(return_value={"last_execution_by_type": {"africam_wildlife": old}})
+    mock_get_events, _ = _patch_pipeline(mocker, mock_state_manager, africam_response)
+
+    await action_process_new_events(integration=mock_integration, action_config=_forced_config())
+
+    assert _fetches(mock_get_events) == [([WILDLIFE_SIGHTING_ID], START)]
+    saved = mock_state_manager.set_state.call_args.kwargs["state"]
+    assert saved["last_execution_by_type"]["africam_wildlife"] == old
+    assert saved["forced_run_applied"] == START.isoformat()

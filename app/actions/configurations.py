@@ -1,6 +1,6 @@
 import string
 import pydantic
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from app.actions.core import PullActionConfiguration
 from app.services.utils import FieldWithUIOptions, UIOptions, GlobalUISchemaOptions
@@ -69,9 +69,9 @@ class AfricamActionConfiguration(PullActionConfiguration):
         None,
         title="Start Datetime",
         description=(
-            "ISO-8601 timestamp. Used only while 'Force Run From Start Datetime' is on: "
-            "every configured event type is then fetched from this moment instead of from "
-            "its saved watermark. Ignored otherwise."
+            "ISO-8601 timestamp, not in the future. Used only by 'Force Run From Start "
+            "Datetime': the forced run fetches every configured event type from this moment "
+            "instead of from its saved watermark. Ignored otherwise."
         ),
         ui_options=UIOptions(widget="date-time"),
     )
@@ -79,9 +79,10 @@ class AfricamActionConfiguration(PullActionConfiguration):
         False,
         title="Force Run From Start Datetime",
         description=(
-            "Resets the per-event-type watermarks so the next run starts at 'Start Datetime' "
-            "(the Lookback Hours cap does not apply). Turn it off again once the catch-up run "
-            "completes; while it stays on, every run re-pulls from 'Start Datetime'."
+            "Each time this is switched on, the next run fetches every event type from "
+            "'Start Datetime' once (the Lookback Hours cap does not apply), then normal "
+            "incremental fetching resumes. Switch it off and on again, or change 'Start "
+            "Datetime', to repeat."
         ),
     )
     ui_global_options = GlobalUISchemaOptions(
@@ -116,6 +117,14 @@ class AfricamActionConfiguration(PullActionConfiguration):
     def empty_start_datetime_is_none(cls, v):
         # A cleared date-time picker submits "" rather than omitting the field.
         return None if v == "" else v
+
+    @pydantic.validator("start_datetime")
+    def start_datetime_not_in_future(cls, v):
+        if v is not None:
+            aware = v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+            if aware > datetime.now(timezone.utc):
+                raise ValueError("start_datetime must not be in the future")
+        return v
 
     @pydantic.root_validator(skip_on_failure=True)
     def force_run_requires_start_datetime(cls, values):

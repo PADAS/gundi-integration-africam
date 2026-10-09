@@ -414,6 +414,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#re-fetching-a-time-range-resetting-the-watermarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Re-fetching a time range (resetting the watermarks)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -516,6 +527,18 @@ a <code>* * * * *</code> crontab — once a minute, automatically.</p>
 <td><code>https://ranger-media.africam.com/gallery/{africam_event_id}</code></td>
 <td>Format string for the gallery URL written back to EarthRanger. Must start with <code>https://</code> and contain <code>{africam_event_id}</code> — both are validated when you save.</td>
 </tr>
+<tr>
+<td><strong>Start Datetime</strong></td>
+<td>—</td>
+<td>empty</td>
+<td>Must not be in the future. Only used by <strong>Force Run From Start Datetime</strong>.</td>
+</tr>
+<tr>
+<td><strong>Force Run From Start Datetime</strong></td>
+<td>—</td>
+<td>off</td>
+<td>Each time it is switched on, the next run fetches all configured event types from <strong>Start Datetime</strong> once, ignoring the saved watermarks and the Lookback Hours cap; after that, normal incremental fetching resumes. Switch it off and on again (or change Start Datetime) to repeat.</td>
+</tr>
 </tbody>
 </table>
 <h2 id="where-the-earthranger-credentials-come-from">Where the EarthRanger credentials come from<a class="headerlink" href="#where-the-earthranger-credentials-come-from" title="Permanent link">&para;</a></h2>
@@ -582,6 +605,15 @@ exist on a site is <strong>skipped with a warning</strong> (throttled to once an
 site); if <strong>none</strong> of your slugs exist on a site, that site's fetch is
 skipped entirely — the runner never falls back to fetching <em>all</em> events.</p>
 <p><a href="../">← Overview</a> · <a href="../troubleshooting/">Troubleshooting</a></p>
+<h2 id="re-fetching-a-time-range-resetting-the-watermarks">Re-fetching a time range (resetting the watermarks)<a class="headerlink" href="#re-fetching-a-time-range-resetting-the-watermarks" title="Permanent link">&para;</a></h2>
+<p>The action remembers, per event type, when it last fetched, and each run continues from there. To make it re-read a range (for example after events were missed while a slug was misspelled, or after a stall):</p>
+<ol>
+<li>Set <strong>Start Datetime</strong> to the beginning of the range you want re-read (it cannot be in the future).</li>
+<li>Turn <strong>Force Run From Start Datetime</strong> on and save.</li>
+<li>Wait for the next run (within a minute). The Activity Log shows one warning naming the start time, and that run fetches every configured type from it. Events that already carry an <code>africam_event_url</code> are skipped, so only events never forwarded are sent to Africam.</li>
+<li>That is it. The forced fetch happens once per switch-on: later runs continue incrementally from the forced run, even if the toggle stays on. To repeat it, switch the toggle off and save, then on and save again, or change Start Datetime.</li>
+</ol>
+<p>The Lookback Hours cap does not apply to a forced run, so choose a Start Datetime that matches the range you actually need; a very old start on a busy site means one large fetch. Each EarthRanger destination on the connection applies the forced run independently.</p>
 
 
 

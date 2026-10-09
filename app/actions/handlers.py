@@ -99,9 +99,41 @@ async def action_process_new_events(integration, action_config: AfricamActionCon
             legacy = state.get("last_execution")
             watermarks = {slug: legacy for slug in resolved} if legacy else {}
 
+        # Operator reset, one-shot: the first run after the toggle is switched on
+        # fetches every resolved type from start_datetime, ignoring watermarks and
+        # the lookback cap, and records the start it applied. Later runs with the
+        # toggle still on use the (advanced) watermarks, so the full-range fetch
+        # never repeats. Switching the toggle off clears the marker, re-arming it;
+        # a changed start_datetime also re-arms it.
+        forced_since = None
+        applied = state.get("forced_run_applied")
+        if action_config.force_run_since_start and action_config.start_datetime is not None:
+            start = action_config.start_datetime
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if applied != start.isoformat():
+                forced_since = start
+                state = {**state, "forced_run_applied": start.isoformat()}
+                await log_action_activity(
+                    integration_id=integration_id,
+                    action_id="process_new_events",
+                    title=(
+                        f"Force Run From Start Datetime: fetching every event type on "
+                        f"{er_base_url} from {start.isoformat()} (once); later runs continue "
+                        f"incrementally. Switch the toggle off and on again to repeat"
+                    ),
+                    level=LogLevel.WARNING,
+                    data={"er_base_url": er_base_url, "start_datetime": start.isoformat()},
+                )
+        elif applied is not None:
+            state = {k: v for k, v in state.items() if k != "forced_run_applied"}
+
         windows = {}  # updated_since -> [slug, ...]; types sharing a watermark share a fetch
         capped = {}   # slug -> stale watermark, for the operator warning
         for slug in resolved:
+            if forced_since is not None:
+                windows.setdefault(forced_since, []).append(slug)
+                continue
             watermark_dt = None
             if watermark := watermarks.get(slug):
                 watermark_dt = datetime.fromisoformat(watermark)
